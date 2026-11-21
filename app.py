@@ -6,6 +6,7 @@ import os
 import pandas as pd
 from datetime import datetime
 import random
+import json
 import time
 
 # --- 2026 UI THEME ---
@@ -52,12 +53,11 @@ def save_progress(new_xp, new_level, new_badge):
     try: progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
     except: pass
 
-# --- TEXTBOOK SYLLABUS (From your photo) ---
 TEXTBOOK_CHAPTERS = {
     "Ch 1: Linear Graphs & Simultaneous Equations": "Graphs of linear equations, solving simultaneous equations by substitution and elimination, word problems.",
-    "Ch 2: Linear Inequalities": "Solving simple linear inequalities, representing solutions on a number line, problem sums.",
+    "Ch 2: Linear Inequalities": "Solving simple linear inequalities, representing solutions on a number line.",
     "Ch 3: Algebraic Expressions": "Addition and subtraction of algebraic expressions, expanding and simplifying.",
-    "Ch 4: Expansion & Factorisation": "Expansion using special identities (a+b)^2, factorisation by grouping, cross-multiplication method."
+    "Ch 4: Expansion & Factorisation": "Expansion using special identities, factorisation by grouping."
 }
 
 # --- SIDEBAR ---
@@ -65,9 +65,8 @@ with st.sidebar:
     st.header("🏆 Richard's Progress")
     st.subheader(level)
     st.write(f"**Badge:** {badge}")
-    next_level_xp = 1000 if xp < 1000 else 2500
-    st.progress(min(xp / next_level_xp, 1.0))
-    st.write(f"**XP:** {xp} / {next_level_xp}")
+    st.progress(min(xp / 1000.0, 1.0))
+    st.write(f"**XP:** {xp} / 1000")
     
     st.divider()
     st.header("🔐 Login")
@@ -79,14 +78,12 @@ with st.sidebar:
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
-def ask_ai(prompt, image_data=None):
+def ask_ai(prompt, image_data=None, use_pro=False):
+    model = "gemini-2.5-pro" if use_pro else "gemini-3.5-flash-lite"
     if image_data:
-        response = client.models.generate_content(
-            model="gemini-2.5-pro",
-            contents=[prompt, image_data]
-        )
+        response = client.models.generate_content(model=model, contents=[prompt, image_data])
     else:
-        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+        response = client.models.generate_content(model=model, contents=prompt)
     return response.text
 
 if "mode" not in st.session_state: st.session_state.mode = "home"
@@ -126,30 +123,30 @@ else:
                 
         with col2:
             st.subheader("📸 Homework / Test Paper")
-            st.write("Upload a photo of your worksheet, and I'll turn it into a quiz.")
-            if st.button("Upload Photo"):
+            st.write("Upload a PDF or Photo, and I'll test you on it.")
+            if st.button("Upload File"):
                 st.session_state.mode = "upload"
                 st.rerun()
 
     elif st.session_state.mode == "upload":
-        st.header("📸 Upload Homework")
-        uploaded_file = st.file_uploader("Choose an image", type=["jpg", "png", "jpeg"])
+        st.header("📸 Upload Homework (PDF or Image)")
+        uploaded_file = st.file_uploader("Choose a file", type=["pdf", "jpg", "png", "jpeg"])
         
         if uploaded_file and st.button("Convert to Quiz"):
-            with st.spinner("Teacher is reading the page..."):
-                image_data = {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
-                prompt = """Extract the math questions from this image. 
+            with st.spinner("Teacher is reading the document..."):
+                prompt = """Extract the math questions from this document. 
                 Output ONLY a valid JSON dictionary.
                 Format: {"Q1": {"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A"}}
                 If there are no multiple-choice options, create 4 logical ones."""
                 
                 try:
-                    text = ask_ai(prompt, image_data).replace("```json", "").replace("```", "").strip()
+                    image_data = {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
+                    text = ask_ai(prompt, image_data, use_pro=True).replace("```json", "").replace("```", "").strip()
                     st.session_state.current_test = json.loads(text)
                     st.session_state.mode = "test_display"
                     st.rerun()
                 except:
-                    st.error("Could not read the image clearly. Try another photo.")
+                    st.error("Could not read the file clearly. Try another file.")
                     
         if st.button("⬅️ Back"):
             st.session_state.mode = "home"
@@ -162,29 +159,30 @@ else:
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                with st.spinner("MOE Teacher is generating questions based on your textbook..."):
+                with st.spinner("MOE Teacher is writing your questions..."):
                     generated_test = {}
-                    topic_description = TEXTBOOK_CHAPTERS[topic]
+                    topic_desc = TEXTBOOK_CHAPTERS[topic]
+                    diff = "High difficulty exam-style problem sum" if is_hard else "Standard textbook practice"
                     
                     for i in range(1, 6): # 5 questions
                         success = False
                         for attempt in range(3):
                             try:
-                                diff = "High difficulty exam-style problem sum" if is_hard else "Standard textbook practice"
-                                # THE ANCHOR PROMPT: Forces AI to stick to the textbook syllabus
-                                prompt = f"Create 1 math multiple-choice question for a Sec 2 student on the topic: '{topic_description}'. Difficulty: {diff}. Output EXACTLY this text format, no markdown:\nQuestion\nA) opt1\nB) opt2\nC) opt3\nD) opt4\nAnswer: A"
+                                prompt = f"Create 1 math multiple-choice question for a Sec 2 student on the topic: '{topic_desc}'. Difficulty: {diff}. Output EXACTLY this text format, no markdown:\nQuestion\nA) opt1\nB) opt2\nC) opt3\nD) opt4\nAnswer: A"
                                 
-                                text = ask_ai(prompt).strip()
+                                # Using the FAST model to prevent timeouts
+                                text = ask_ai(prompt, use_pro=False).strip()
                                 lines = [line.strip() for line in text.split('\n') if line.strip()]
                                 
                                 if len(lines) >= 6 and lines[-1].startswith("Answer:"):
                                     generated_test[f"Q{i}"] = {"question": lines[0], "options": lines[1:5], "answer": lines[5].split(":")[1].strip()}
                                     success = True
                                     break
-                            except: time.sleep(1)
+                            except Exception:
+                                time.sleep(1)
                         
                         if not success:
-                            st.error("⚠️ AI is busy. Click Try Again.")
+                            st.error("⚠️ AI is generating too fast. Click Try Again.")
                             if st.button("Try Again 🔄"): st.rerun()
                             st.stop()
                             
@@ -216,7 +214,6 @@ else:
                     st.rerun()
 
     elif st.session_state.mode == "test_display":
-        # (Same display logic as above, just for the photo test)
         test_data = st.session_state.current_test
         q_keys = list(test_data.keys())
         total_q = len(q_keys)
