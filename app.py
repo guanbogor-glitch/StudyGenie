@@ -30,7 +30,7 @@ def get_db():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        # YOUR GOOGLE SHEET ID IS HARDCODED HERE
+        # Replace this with your actual Google Sheet URL ID
         sheet_id = "1Lo-X7A7y0UTgCJqDTiDp87YHtohxOLJF3_qnkvGvXOA" 
         return client.open_by_key(sheet_id)
     except Exception as e:
@@ -52,6 +52,16 @@ except:
     bot_color = "Silver"
     bot_ability = "Standard CPU"
 
+SYLLABUS = {
+    "Mathematics (G3)": {
+        "Sec 2A": ["Ch 1: Linear Equations & Simultaneous Equations", "Ch 2: Linear Inequalities", "Ch 3: Algebraic Expressions", "Ch 4: Expansion & Factorisation"],
+        "Sec 1 Review": ["Algebra Basics", "Fractions & Decimals"]
+    },
+    "Science (G3)": {
+        "Sec 2": ["Human Digestive System", "Electrical Circuits"]
+    }
+}
+
 # --- XP SYSTEM ---
 if xp < 1000: level, badge = "Level 1: Novice 🌱", "🥉 Bronze Scout"
 elif xp < 2500: level, badge = "Level 2: Apprentice 📖", "🥈 Silver Explorer"
@@ -59,9 +69,11 @@ elif xp < 5000: level, badge = "Level 3: Scholar 🧠", "🥇 Gold Master"
 elif xp < 10000: level, badge = "Level 4: Master 🧞‍♂️", "🏆 Platinum Genius"
 else: level, badge = "Level 5: Grandmaster 🌟", "💎 Diamond Legend"
 
-# --- UPDATE DATABASE FUNCTION ---
 def save_progress(new_xp, new_level, new_badge):
-    progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
+    try:
+        progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
+    except:
+        pass
 
 # --- LOGIN SYSTEM ---
 st.sidebar.header("🔐 Login")
@@ -108,53 +120,59 @@ if is_dev:
             for row in reversed(all_mistakes):
                 with st.expander(f"❌ {row['Question'][:50]}..."):
                     st.write(f"**Date:** {row['Date']}")
-                    st.write(f"**Subject:** {row['Subject']}")
                     st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
                     st.write(f"**Correct Answer:** {row['Correct_Answer']}")
         else:
             st.success("No mistakes logged yet!")
     except:
-        st.info("No mistakes logged yet. Start a test to see data!")
+        st.info("No mistakes logged yet.")
 
 # --- STUDENT VIEW ---
 else:
+    with st.sidebar:
+        st.divider()
+        st.header("🎯 Choose Topic")
+        
+        if st.session_state.mode in ["home", "test"]:
+            subject = st.selectbox("Subject:", list(SYLLABUS.keys()))
+            book = st.selectbox("Book / Level:", list(SYLLABUS[subject].keys()))
+            topic = st.selectbox("Chapter:", SYLLABUS[subject][book])
+            final_topic_name = f"{subject} - {book} - {topic}"
+            
+            difficulty = st.radio("Select Difficulty:", ["Standard (Normal)", "Hard Mode (Extra XP)"])
+                    
+            if st.button("📝 Take the Test"):
+                st.session_state.mode = "test"
+                st.session_state.current_test = None 
+                st.session_state.current_topic = final_topic_name
+                st.session_state.current_difficulty = difficulty
+                st.session_state.test_results = None
+                st.session_state.q_index = 0
+                st.session_state.answers = {}
+                st.rerun()
+
     if st.session_state.mode == "home":
         st.write("Welcome Richard! Select a Subject, Book, and Chapter on the left to begin.")
-        
-        if st.button("📝 Start Math Test"):
-            st.session_state.mode = "test"
-            st.session_state.current_test = None
-            st.session_state.q_index = 0
-            st.session_state.answers = {}
-            st.rerun()
-            
+
     elif st.session_state.mode == "test":
-        st.header("📝 Test: Mathematics (G3)")
+        topic = st.session_state.current_topic
+        is_hard = st.session_state.get("current_difficulty") == "Hard Mode (Extra XP)"
+        st.header(f"📝 Test: {topic} ({'Hard Mode' if is_hard else 'Standard'})")
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                # PURE PYTHON GENERATION
-                generated_test = {}
-                for i in range(1, 11):
-                    a = random.randint(2, 5); b = random.randint(1, 5); x = random.randint(2, 10)
-                    eq = f"Solve the linear equation:\n\n{a}(x + {b}) = {a*(x+b)}"
-                    ans = f"x = {x}"
-                    
-                    options = [ans]
-                    while len(options) < 4:
-                        wx = x + random.choice([-2, -1, 1, 2])
-                        wrong_ans = f"x = {wx}"
-                        if wrong_ans not in options and wrong_ans != ans:
-                            options.append(wrong_ans)
-                    
-                    random.shuffle(options)
-                    letters = ["A", "B", "C", "D"]
-                    correct_letter = letters[options.index(ans)]
-                    formatted_options = [f"{letters[j]}) {options[j]}" for j in range(4)]
-                    
-                    generated_test[f"Q{i}"] = {"question": eq, "options": formatted_options, "answer": correct_letter}
-                
-                st.session_state.current_test = generated_test
+                with st.spinner("Teacher is generating harder questions..."):
+                    try:
+                        diff_prompt = "Make 3 easy, 4 intermediate, and 3 very challenging exam-style problem sums." if is_hard else "Make 5 easy and 5 intermediate."
+                        prompt = f"Create a 10-question multiple-choice test for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"Q1\": {{\"question\": \"...\", \"options\": [\"A...\", \"B...\", \"C...\"], \"answer\": \"A\"}}}}"
+                        
+                        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+                        clean_text = response.text.replace("```json", "").replace("```", "").strip()
+                        st.session_state.current_test = json.loads(clean_text)
+                    except Exception:
+                        st.error("⚠️ The AI had trouble formatting a question. Please click Try Again.")
+                        if st.button("Try Again 🔄"): st.rerun()
+                        st.stop()
 
             test_data = st.session_state.current_test
             q_keys = list(test_data.keys())
@@ -171,6 +189,14 @@ else:
             current_ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
             st.session_state.answers[q_key] = current_ans
             
+            # HINT BUTTON
+            with st.popover(f"🆘 Need a hint for {q_key}?"):
+                if st.button(f"Get Hint for {q_key}", key=f"btn_hint_{curr_idx}"):
+                    with st.spinner("Thinking..."):
+                        hint_prompt = f"Give a Socratic hint for this math question without revealing the exact answer: {q_data['question']}"
+                        hint_response = client.models.generate_content(model="gemini-2.5-pro", contents=hint_prompt)
+                        st.info(f"**Hint:** {hint_response.text}")
+
             st.write("---")
             
             col1, col2 = st.columns([1, 1])
@@ -211,22 +237,25 @@ else:
                 st.balloons()
                 st.success("🌟 FLAWLESS VICTORY! 🌟 +30 Bonus XP awarded!")
                 base_xp += 30
+                
+            if is_hard:
+                base_xp += 20
+                st.info("🔥 HARD MODE BONUS: +20 XP awarded!")
             
             current_xp = xp + base_xp
-            
-            # SAVE TO GOOGLE SHEETS
             save_progress(current_xp, level, badge)
             
-            st.write(f"🏆 You earned **{base_xp} XP**! (Refresh to see your new level)")
+            st.write(f"🏆 You earned **{base_xp} XP**!")
             
-            # SAVE MISTAKES TO GOOGLE SHEETS
             if len(wrong_questions) > 0:
                 for wq in wrong_questions:
                     correct_option = next((opt for opt in wq['options'] if opt.startswith(wq['correct'])), wq['correct'])
-                    mistakes_sheet.append_row([str(datetime.now()), "Mathematics", wq['question'], correct_option, wq['user_ans']])
+                    try:
+                        mistakes_sheet.append_row([str(datetime.now()), "Mathematics", wq['question'], correct_option, wq['user_ans']])
+                    except: pass
                 
                 st.divider()
-                st.subheader("🔍 Review Mistakes")
+                st.subheader("🔍 Review Mistakes & Guidance")
                 for wq in wrong_questions:
                     with st.expander(f"❌ {wq['q_key']}: {wq['question']}"):
                         st.write(f"**Richard's Answer:** {wq['user_ans']}")
@@ -236,7 +265,7 @@ else:
                         st.write("---")
                         try:
                             explain_prompt = f"Richard answered: {wq['user_ans']}. The correct answer is {correct_option}. Explain step-by-step why."
-                            explanation = ask_ai(explain_prompt)
+                            explanation = client.models.generate_content(model="gemini-2.5-pro", contents=explain_prompt).text
                             st.info(explanation)
                         except: st.write("Could not load explanation.")
             
