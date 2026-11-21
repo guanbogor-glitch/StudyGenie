@@ -7,6 +7,8 @@ import plotly.express as px
 import pandas as pd
 from datetime import datetime
 import random
+import json
+import time
 
 # --- 2026 UI THEME ---
 st.set_page_config(page_title="StudyGenie AI", page_icon="🚀", layout="wide")
@@ -109,7 +111,7 @@ if "answers" not in st.session_state: st.session_state.answers = {}
 # --- DEVELOPER DASHBOARD ---
 if is_dev:
     st.header("👨‍💻 Developer / Parent Dashboard")
-    st.write("### Detailed Mistake Log (Live from Google Sheets)")
+    st.write("### Detailed Mistake Log")
     try:
         all_mistakes = mistakes_sheet.get_all_records()
         if all_mistakes:
@@ -161,7 +163,7 @@ else:
         if st.session_state.get("lesson_text") is None:
             with st.spinner("Preparing your visual lesson..."):
                 try:
-                    prompt = f"Explain {topic} for a Singapore Sec 2 (G3) student named Richard. Use simple language. DO NOT use LaTeX formatting. Instead, write math plainly (e.g. 3x + 5 = 15). Include a text-based diagram using emojis."
+                    prompt = f"Explain {topic} for a Singapore Sec 2 (G3) student named Richard. Use simple language. DO NOT use LaTeX formatting. Include a text-based diagram using emojis."
                     st.session_state.lesson_text = ask_ai(prompt)
                 except Exception:
                     st.error("⚠️ Google is busy. Try again.")
@@ -176,52 +178,27 @@ else:
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                # PURE PYTHON GENERATION
-                generated_test = {}
-                for i in range(1, 11):
-                    q_type = random.choice(["brackets", "both_sides", "simultaneous"])
+                with st.spinner("Teacher is generating questions (Basic to Exam-Style)..."):
+                    # THE RETRY LOOP: If the AI messes up the JSON, it tries again automatically
+                    success = False
+                    for attempt in range(3):
+                        try:
+                            diff_prompt = "Make 3 basic questions, 4 intermediate, and 3 highly challenging MOE exam-style problem sums (include word problems or graph concepts if applicable)." if is_hard else "Make 5 basic and 5 intermediate questions."
+                            
+                            prompt = f"Create a 10-question multiple-choice test for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"Q1\": {{\"question\": \"...\", \"options\": [\"A) ...\", \"B) ...\", \"C) ...\", \"D) ...\"], \"answer\": \"A\"}}, \"Q2\": ...}}"
+                            
+                            response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+                            clean_text = response.text.replace("```json", "").replace("```", "").strip()
+                            st.session_state.current_test = json.loads(clean_text)
+                            success = True
+                            break
+                        except Exception:
+                            time.sleep(2) # Wait 2 seconds and try again
                     
-                    if q_type == "brackets":
-                        a = random.randint(2, 5); b = random.randint(1, 5); x = random.randint(2, 10)
-                        eq = f"Solve the linear equation:\n\n{a}(x + {b}) = {a*(x+b)}"
-                        ans = f"x = {x}"
-                    elif q_type == "both_sides":
-                        a = random.randint(3, 6); b = random.randint(1, 10); c = random.randint(1, 2); x = random.randint(2, 10)
-                        d = (a*x + b) - (c*x)
-                        c_str = f"{c}x" if c > 1 else "x"
-                        eq = f"Solve the linear equation:\n\n{a}x + {b} = {c_str} + {d}"
-                        ans = f"x = {x}"
-                    else:
-                        x = random.randint(1, 5); y = random.randint(1, 5)
-                        a, b = random.randint(1, 3), random.randint(1, 3)
-                        c, d = random.randint(1, 3), random.randint(1, 3)
-                        while a == c and b == d:
-                            c, d = random.randint(1, 3), random.randint(1, 3)
-                        eq1 = f"{a}x + {b}y = {a*x + b*y}"
-                        eq2 = f"{c}x + {d}y = {c*x + d*y}"
-                        eq = f"Solve the simultaneous equations:\n\n{eq1}\n\nand\n\n{eq2}"
-                        ans = f"x = {x}, y = {y}"
-                    
-                    options = [ans]
-                    while len(options) < 4:
-                        if "," in ans:
-                            wx = x + random.choice([-2, -1, 1, 2])
-                            wy = y + random.choice([-2, -1, 1, 2])
-                            wrong_ans = f"x = {wx}, y = {wy}"
-                        else:
-                            wx = x + random.choice([-2, -1, 1, 2])
-                            wrong_ans = f"x = {wx}"
-                        if wrong_ans not in options and wrong_ans != ans:
-                            options.append(wrong_ans)
-                    
-                    random.shuffle(options)
-                    letters = ["A", "B", "C", "D"]
-                    correct_letter = letters[options.index(ans)]
-                    formatted_options = [f"{letters[j]}) {options[j]}" for j in range(4)]
-                    
-                    generated_test[f"Q{i}"] = {"question": eq, "options": formatted_options, "answer": correct_letter}
-                
-                st.session_state.current_test = generated_test
+                    if not success:
+                        st.error("⚠️ The AI had trouble formatting the questions. Please click Try Again.")
+                        if st.button("Try Again 🔄"): st.rerun()
+                        st.stop()
 
             test_data = st.session_state.current_test
             q_keys = list(test_data.keys())
