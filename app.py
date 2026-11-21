@@ -8,6 +8,8 @@ from datetime import datetime
 import random
 import json
 import time
+from pypdf import PdfReader
+import io
 
 # --- 2026 UI THEME ---
 st.set_page_config(page_title="StudyGenie AI", page_icon="🚀", layout="wide")
@@ -22,7 +24,7 @@ st.markdown("""
 
 st.title("🚀 Richard's StudyGenie AI")
 
-# --- DATABASE CONNECTION ---
+# --- DATABASE CONNECTION (SAFE) ---
 @st.cache_resource
 def get_db():
     try:
@@ -33,25 +35,32 @@ def get_db():
         sheet_id = "1Lo-X7A7y0UTgCJqDTiDp87YHtohxOLJF3_qnkvGvXOA" 
         return client.open_by_key(sheet_id)
     except Exception as e:
-        st.error(f"Database connection error: {e}")
-        st.stop()
+        return None
 
 db = get_db()
-progress_sheet = db.worksheet("Progress")
-mistakes_sheet = db.worksheet("Mistakes")
-
-try:
-    richard_data = progress_sheet.row_values(2)
-    xp = int(richard_data[1]) if len(richard_data) > 1 and richard_data[1] else 0
-except: xp = 0
+if db:
+    try:
+        progress_sheet = db.worksheet("Progress")
+        mistakes_sheet = db.worksheet("Mistakes")
+        richard_data = progress_sheet.row_values(2)
+        xp = int(richard_data[1]) if len(richard_data) > 1 and richard_data[1] else 0
+    except:
+        xp = 0
+        progress_sheet = None
+        mistakes_sheet = None
+else:
+    xp = 0
+    progress_sheet = None
+    mistakes_sheet = None
 
 if xp < 1000: level, badge = "Level 1: Novice 🌱", "🥉 Bronze Scout"
 elif xp < 2500: level, badge = "Level 2: Apprentice 📖", "🥈 Silver Explorer"
 else: level, badge = "Level 3: Scholar 🧠", "🥇 Gold Master"
 
 def save_progress(new_xp, new_level, new_badge):
-    try: progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
-    except: pass
+    if progress_sheet:
+        try: progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
+        except: pass
 
 TEXTBOOK_CHAPTERS = {
     "Ch 1: Linear Graphs & Simultaneous Equations": "Graphs of linear equations, solving simultaneous equations by substitution and elimination.",
@@ -67,6 +76,9 @@ with st.sidebar:
     st.write(f"**Badge:** {badge}")
     st.progress(min(xp / 1000.0, 1.0))
     st.write(f"**XP:** {xp} / 1000")
+    
+    if not db:
+        st.warning("⚠️ Database offline. XP will not save.")
     
     st.divider()
     st.header("🔐 Login")
@@ -90,13 +102,16 @@ if "answers" not in st.session_state: st.session_state.answers = {}
 # --- DEVELOPER DASHBOARD ---
 if st.session_state.get("is_dev"):
     st.header("👨‍💻 Parent Dashboard")
-    try:
-        all_mistakes = mistakes_sheet.get_all_records()
-        for row in reversed(all_mistakes):
-            with st.expander(f"❌ {row['Question'][:50]}..."):
-                st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
-                st.write(f"**Correct Answer:** {row['Correct_Answer']}")
-    except: st.info("No data yet.")
+    if mistakes_sheet:
+        try:
+            all_mistakes = mistakes_sheet.get_all_records()
+            for row in reversed(all_mistakes):
+                with st.expander(f"❌ {row['Question'][:50]}..."):
+                    st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
+                    st.write(f"**Correct Answer:** {row['Correct_Answer']}")
+        except: st.info("No data yet.")
+    else:
+        st.warning("Database offline. Cannot load mistakes.")
 
 # --- STUDENT VIEW ---
 else:
@@ -120,7 +135,7 @@ else:
                 
         with col2:
             st.subheader("📸 Homework / Test Paper")
-            if st.button("Upload File"):
+            if st.button("Upload File (PDF/Photo)"):
                 st.session_state.mode = "upload"
                 st.rerun()
 
@@ -132,12 +147,29 @@ else:
             with st.spinner("Teacher is reading the document..."):
                 prompt = """Extract the math questions from this document. Output ONLY a valid JSON dictionary. Format: {"Q1": {"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A"}}"""
                 try:
-                    text = ask_ai(prompt, use_pro=True).replace("```json", "").replace("```", "").strip()
-                    st.session_state.current_test = json.loads(text)
+                    if uploaded_file.type == "application/pdf":
+                        # Extract text from PDF using Python first
+                        reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
+                        extracted_text = ""
+                        for page in reader.pages[:5]: # Read first 5 pages
+                            extracted_text += page.extract_text() + "\n"
+                        
+                        text = ask_ai(f"{prompt}\n\nHere is the text from the document:\n{extracted_text}", use_pro=True)
+                    else:
+                        # It's an image, use AI Vision
+                        image_data = {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
+                        response = client.models.generate_content(
+                            model="gemini-2.5-pro",
+                            contents=[prompt, image_data]
+                        )
+                        text = response.text
+                        
+                    clean_text = text.replace("```json", "").replace("```", "").strip()
+                    st.session_state.current_test = json.loads(clean_text)
                     st.session_state.mode = "test_display"
                     st.rerun()
-                except:
-                    st.error("Could not read the file. Try another photo/PDF.")
+                except Exception as e:
+                    st.error(f"Could not read the file clearly. Error: {str(e)[:100]}")
                     
         if st.button("⬅️ Back"):
             st.session_state.mode = "home"
@@ -154,7 +186,7 @@ else:
                     generated_test = {}
                     topic_desc = TEXTBOOK_CHAPTERS[topic]
                     
-                    # 1. GENERATE 4 STABLE PYTHON QUESTIONS
+                    # 4 Stable Python Questions
                     for i in range(1, 5):
                         a = random.randint(2, 5); b = random.randint(1, 5); x = random.randint(2, 10)
                         eq = f"Solve the linear equation:\n\n{a}(x + {b}) = {a*(x+b)}"
@@ -168,11 +200,10 @@ else:
                         letters = ["A", "B", "C", "D"]
                         generated_test[f"Q{i}"] = {"question": eq, "options": [f"{letters[j]}) {options[j]}" for j in range(4)], "answer": letters[options.index(ans)]}
 
-                    # 2. GENERATE 1 SMART AI QUESTION (THE MOE PROBLEM SUM)
+                    # 1 Smart AI Question
                     success = False
                     for attempt in range(3):
                         try:
-                            # We only ask for ONE question to prevent formatting crashes
                             prompt = f"Create ONE math multiple-choice question for a Sec 2 student on the topic: '{topic_desc}'. Difficulty: {'Hard exam-style' if is_hard else 'Standard'}. Output EXACTLY this text format, no markdown:\nQuestion\nA) opt1\nB) opt2\nC) opt3\nD) opt4\nAnswer: A"
                             text = ask_ai(prompt, use_pro=True).strip()
                             lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -185,7 +216,6 @@ else:
                             time.sleep(2)
                     
                     if not success:
-                        # If AI fails, fallback to Python so the test doesn't crash
                         generated_test["Q5"] = {"question": "Solve: 3x + 5 = 20", "options": ["A) x = 5", "B) x = 4", "C) x = 6", "D) x = 7"], "answer": "A"}
                             
                     st.session_state.current_test = generated_test
