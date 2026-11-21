@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 import random
 import json
+import time
 
 # --- 2026 UI THEME ---
 st.set_page_config(page_title="StudyGenie AI", page_icon="🚀", layout="wide")
@@ -30,7 +31,6 @@ def get_db():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        # Replace this with your actual Google Sheet URL ID
         sheet_id = "1Lo-X7A7y0UTgCJqDTiDp87YHtohxOLJF3_qnkvGvXOA" 
         return client.open_by_key(sheet_id)
     except Exception as e:
@@ -161,18 +161,29 @@ else:
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                with st.spinner("Teacher is generating harder questions..."):
-                    try:
-                        diff_prompt = "Make 3 easy, 4 intermediate, and 3 very challenging exam-style problem sums." if is_hard else "Make 5 easy and 5 intermediate."
-                        prompt = f"Create a 10-question multiple-choice test for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"Q1\": {{\"question\": \"...\", \"options\": [\"A...\", \"B...\", \"C...\"], \"answer\": \"A\"}}}}"
-                        
-                        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                        st.session_state.current_test = json.loads(clean_text)
-                    except Exception:
-                        st.error("⚠️ The AI had trouble formatting a question. Please click Try Again.")
-                        if st.button("Try Again 🔄"): st.rerun()
-                        st.stop()
+                with st.spinner("Teacher is generating the test..."):
+                    generated_test = {}
+                    for i in range(1, 11):
+                        success = False
+                        for attempt in range(3):
+                            try:
+                                diff_prompt = "Make it a very challenging MOE exam-style problem sum." if is_hard else "Make it a standard MOE practice question."
+                                prompt = f"Create ONE math multiple-choice question for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"question\": \"...\", \"options\": [\"A...\", \"B...\", \"C...\"], \"answer\": \"A\"}}"
+                                
+                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+                                clean_text = response.text.replace("```json", "").replace("```", "").strip()
+                                q_data = json.loads(clean_text)
+                                generated_test[f"Q{i}"] = q_data
+                                success = True
+                                break
+                            except Exception:
+                                time.sleep(1)
+                        if not success:
+                            st.error("⚠️ The AI had trouble formatting a question. Please click Try Again.")
+                            if st.button("Try Again 🔄"): st.rerun()
+                            st.stop()
+                    
+                    st.session_state.current_test = generated_test
 
             test_data = st.session_state.current_test
             q_keys = list(test_data.keys())
