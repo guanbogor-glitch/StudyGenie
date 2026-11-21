@@ -1,18 +1,3 @@
-I see the exact error. Even though we switched to the faster model, it is still failing because generating 5 questions sequentially with text parsing is too brittle. The AI is adding a stray space or changing the word "Answer", which breaks the Python code.
-
-We are going to do the Ultimate Hybrid fix. This is how professional apps do it:
-
-1. The AI (Pro Model) is used ONLY for the "Hard Mode" questions. We will ask it for exactly ONE complex question. Because it's only one, it won't time out, and we can easily check if it formatted it correctly.
-2. The Python Engine generates 4 standard questions. This gives a total of 5 questions, guarantees the test loads instantly, and ensures it never crashes.
-
-Here is the final code that makes this hybrid system work.
-
-Step 1: Copy the Code
-
-1. Open app.py in Notepad, Ctrl + A, Delete.
-2. Paste this:
-
-```python
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -277,12 +262,3 @@ else:
             st.session_state.q_index = 0
             st.session_state.answers = {}
             st.rerun()
-```
-
-Step 2: Update and Reboot
-
-1. Save the file.
-2. Update GitHub -> app.py -> Commit.
-3. Go to Streamlit -> Reboot app.
-
-This creates a 5-question test. 4 questions are guaranteed to load instantly, and 1 question is a smart, textbook-aligned question from the Pro AI. If the AI fails, it quietly falls back to a math question instead of crashing. Try it!
