@@ -7,8 +7,6 @@ import plotly.express as px
 import pandas as pd
 from datetime import datetime
 import random
-import json
-import time
 
 # --- 2026 UI THEME ---
 st.set_page_config(page_title="StudyGenie AI", page_icon="🚀", layout="wide")
@@ -72,8 +70,7 @@ else: level, badge = "Level 5: Grandmaster 🌟", "💎 Diamond Legend"
 def save_progress(new_xp, new_level, new_badge):
     try:
         progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
-    except:
-        pass
+    except: pass
 
 # --- LOGIN SYSTEM ---
 st.sidebar.header("🔐 Login")
@@ -101,8 +98,8 @@ with st.sidebar:
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
-def ask_ai(prompt, model="gemini-2.5-pro"):
-    response = client.models.generate_content(model=model, contents=prompt)
+def ask_ai(prompt):
+    response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
     return response.text
 
 if "mode" not in st.session_state: st.session_state.mode = "home"
@@ -113,7 +110,6 @@ if "answers" not in st.session_state: st.session_state.answers = {}
 if is_dev:
     st.header("👨‍💻 Developer / Parent Dashboard")
     st.write("### Detailed Mistake Log (Live from Google Sheets)")
-    
     try:
         all_mistakes = mistakes_sheet.get_all_records()
         if all_mistakes:
@@ -122,10 +118,8 @@ if is_dev:
                     st.write(f"**Date:** {row['Date']}")
                     st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
                     st.write(f"**Correct Answer:** {row['Correct_Answer']}")
-        else:
-            st.success("No mistakes logged yet!")
-    except:
-        st.info("No mistakes logged yet.")
+        else: st.success("No mistakes logged yet!")
+    except: st.info("No mistakes logged yet.")
 
 # --- STUDENT VIEW ---
 else:
@@ -133,7 +127,7 @@ else:
         st.divider()
         st.header("🎯 Choose Topic")
         
-        if st.session_state.mode in ["home", "test"]:
+        if st.session_state.mode in ["home", "test", "learn"]:
             subject = st.selectbox("Subject:", list(SYLLABUS.keys()))
             book = st.selectbox("Book / Level:", list(SYLLABUS[subject].keys()))
             topic = st.selectbox("Chapter:", SYLLABUS[subject][book])
@@ -141,7 +135,14 @@ else:
             
             difficulty = st.radio("Select Difficulty:", ["Standard (Normal)", "Hard Mode (Extra XP)"])
                     
-            if st.button("📝 Take the Test"):
+            if st.button("📖 1. Learn this Topic"):
+                st.session_state.mode = "learn"
+                st.session_state.lesson_text = None 
+                st.session_state.current_topic = final_topic_name
+                st.session_state.test_results = None
+                st.rerun()
+            
+            if st.button("📝 2. Take the Test"):
                 st.session_state.mode = "test"
                 st.session_state.current_test = None 
                 st.session_state.current_topic = final_topic_name
@@ -154,6 +155,20 @@ else:
     if st.session_state.mode == "home":
         st.write("Welcome Richard! Select a Subject, Book, and Chapter on the left to begin.")
 
+    elif st.session_state.mode == "learn":
+        topic = st.session_state.current_topic
+        st.header(f"📖 Lesson: {topic}")
+        if st.session_state.get("lesson_text") is None:
+            with st.spinner("Preparing your visual lesson..."):
+                try:
+                    prompt = f"Explain {topic} for a Singapore Sec 2 (G3) student named Richard. Use simple language. DO NOT use LaTeX formatting. Instead, write math plainly (e.g. 3x + 5 = 15). Include a text-based diagram using emojis."
+                    st.session_state.lesson_text = ask_ai(prompt)
+                except Exception:
+                    st.error("⚠️ Google is busy. Try again.")
+                    if st.button("Try Again 🔄"): st.rerun()
+                    st.stop()
+        st.markdown(st.session_state.lesson_text)
+
     elif st.session_state.mode == "test":
         topic = st.session_state.current_topic
         is_hard = st.session_state.get("current_difficulty") == "Hard Mode (Extra XP)"
@@ -161,29 +176,52 @@ else:
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                with st.spinner("Teacher is generating the test..."):
-                    generated_test = {}
-                    for i in range(1, 11):
-                        success = False
-                        for attempt in range(3):
-                            try:
-                                diff_prompt = "Make it a very challenging MOE exam-style problem sum." if is_hard else "Make it a standard MOE practice question."
-                                prompt = f"Create ONE math multiple-choice question for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"question\": \"...\", \"options\": [\"A...\", \"B...\", \"C...\"], \"answer\": \"A\"}}"
-                                
-                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                                clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                                q_data = json.loads(clean_text)
-                                generated_test[f"Q{i}"] = q_data
-                                success = True
-                                break
-                            except Exception:
-                                time.sleep(1)
-                        if not success:
-                            st.error("⚠️ The AI had trouble formatting a question. Please click Try Again.")
-                            if st.button("Try Again 🔄"): st.rerun()
-                            st.stop()
+                # PURE PYTHON GENERATION
+                generated_test = {}
+                for i in range(1, 11):
+                    q_type = random.choice(["brackets", "both_sides", "simultaneous"])
                     
-                    st.session_state.current_test = generated_test
+                    if q_type == "brackets":
+                        a = random.randint(2, 5); b = random.randint(1, 5); x = random.randint(2, 10)
+                        eq = f"Solve the linear equation:\n\n{a}(x + {b}) = {a*(x+b)}"
+                        ans = f"x = {x}"
+                    elif q_type == "both_sides":
+                        a = random.randint(3, 6); b = random.randint(1, 10); c = random.randint(1, 2); x = random.randint(2, 10)
+                        d = (a*x + b) - (c*x)
+                        c_str = f"{c}x" if c > 1 else "x"
+                        eq = f"Solve the linear equation:\n\n{a}x + {b} = {c_str} + {d}"
+                        ans = f"x = {x}"
+                    else:
+                        x = random.randint(1, 5); y = random.randint(1, 5)
+                        a, b = random.randint(1, 3), random.randint(1, 3)
+                        c, d = random.randint(1, 3), random.randint(1, 3)
+                        while a == c and b == d:
+                            c, d = random.randint(1, 3), random.randint(1, 3)
+                        eq1 = f"{a}x + {b}y = {a*x + b*y}"
+                        eq2 = f"{c}x + {d}y = {c*x + d*y}"
+                        eq = f"Solve the simultaneous equations:\n\n{eq1}\n\nand\n\n{eq2}"
+                        ans = f"x = {x}, y = {y}"
+                    
+                    options = [ans]
+                    while len(options) < 4:
+                        if "," in ans:
+                            wx = x + random.choice([-2, -1, 1, 2])
+                            wy = y + random.choice([-2, -1, 1, 2])
+                            wrong_ans = f"x = {wx}, y = {wy}"
+                        else:
+                            wx = x + random.choice([-2, -1, 1, 2])
+                            wrong_ans = f"x = {wx}"
+                        if wrong_ans not in options and wrong_ans != ans:
+                            options.append(wrong_ans)
+                    
+                    random.shuffle(options)
+                    letters = ["A", "B", "C", "D"]
+                    correct_letter = letters[options.index(ans)]
+                    formatted_options = [f"{letters[j]}) {options[j]}" for j in range(4)]
+                    
+                    generated_test[f"Q{i}"] = {"question": eq, "options": formatted_options, "answer": correct_letter}
+                
+                st.session_state.current_test = generated_test
 
             test_data = st.session_state.current_test
             q_keys = list(test_data.keys())
@@ -200,13 +238,12 @@ else:
             current_ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
             st.session_state.answers[q_key] = current_ans
             
-            # HINT BUTTON
             with st.popover(f"🆘 Need a hint for {q_key}?"):
                 if st.button(f"Get Hint for {q_key}", key=f"btn_hint_{curr_idx}"):
                     with st.spinner("Thinking..."):
                         hint_prompt = f"Give a Socratic hint for this math question without revealing the exact answer: {q_data['question']}"
-                        hint_response = client.models.generate_content(model="gemini-2.5-pro", contents=hint_prompt)
-                        st.info(f"**Hint:** {hint_response.text}")
+                        hint_text = ask_ai(hint_prompt)
+                        st.info(f"**Hint:** {hint_text}")
 
             st.write("---")
             
@@ -276,7 +313,7 @@ else:
                         st.write("---")
                         try:
                             explain_prompt = f"Richard answered: {wq['user_ans']}. The correct answer is {correct_option}. Explain step-by-step why."
-                            explanation = client.models.generate_content(model="gemini-2.5-pro", contents=explain_prompt).text
+                            explanation = ask_ai(explain_prompt)
                             st.info(explanation)
                         except: st.write("Could not load explanation.")
             
