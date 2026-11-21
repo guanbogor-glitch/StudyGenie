@@ -3,11 +3,9 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from google import genai
 import os
-import plotly.express as px
 import pandas as pd
 from datetime import datetime
 import random
-import json
 import time
 
 # --- 2026 UI THEME ---
@@ -41,67 +39,54 @@ db = get_db()
 progress_sheet = db.worksheet("Progress")
 mistakes_sheet = db.worksheet("Mistakes")
 
-# --- FETCH RICHARD'S DATA ---
 try:
     richard_data = progress_sheet.row_values(2)
     xp = int(richard_data[1]) if len(richard_data) > 1 and richard_data[1] else 0
-    bot_color = richard_data[4] if len(richard_data) > 4 and richard_data[4] else "Silver"
-    bot_ability = richard_data[5] if len(richard_data) > 5 and richard_data[5] else "Standard CPU"
-except:
-    xp = 0
-    bot_color = "Silver"
-    bot_ability = "Standard CPU"
+except: xp = 0
 
-SYLLABUS = {
-    "Mathematics (G3)": {
-        "Sec 2A": ["Ch 1: Linear Equations & Simultaneous Equations", "Ch 2: Linear Inequalities", "Ch 3: Algebraic Expressions", "Ch 4: Expansion & Factorisation"],
-        "Sec 1 Review": ["Algebra Basics", "Fractions & Decimals"]
-    },
-    "Science (G3)": {
-        "Sec 2": ["Human Digestive System", "Electrical Circuits"]
-    }
-}
-
-# --- XP SYSTEM ---
 if xp < 1000: level, badge = "Level 1: Novice 🌱", "🥉 Bronze Scout"
 elif xp < 2500: level, badge = "Level 2: Apprentice 📖", "🥈 Silver Explorer"
-elif xp < 5000: level, badge = "Level 3: Scholar 🧠", "🥇 Gold Master"
-elif xp < 10000: level, badge = "Level 4: Master 🧞‍♂️", "🏆 Platinum Genius"
-else: level, badge = "Level 5: Grandmaster 🌟", "💎 Diamond Legend"
+else: level, badge = "Level 3: Scholar 🧠", "🥇 Gold Master"
 
 def save_progress(new_xp, new_level, new_badge):
-    try:
-        progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
+    try: progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
     except: pass
 
-# --- LOGIN SYSTEM ---
-st.sidebar.header("🔐 Login")
-user_role = st.sidebar.radio("Select Mode:", ["Student (Richard)", "Developer (Parent)"])
-is_dev = False
-
-if user_role == "Developer (Parent)":
-    password = st.sidebar.text_input("Enter Password:", type="password")
-    if password == "parent123":
-        is_dev = True
-        st.sidebar.success("Developer Access Granted ✅")
+# --- TEXTBOOK SYLLABUS (From your photo) ---
+TEXTBOOK_CHAPTERS = {
+    "Ch 1: Linear Graphs & Simultaneous Equations": "Graphs of linear equations, solving simultaneous equations by substitution and elimination, word problems.",
+    "Ch 2: Linear Inequalities": "Solving simple linear inequalities, representing solutions on a number line, problem sums.",
+    "Ch 3: Algebraic Expressions": "Addition and subtraction of algebraic expressions, expanding and simplifying.",
+    "Ch 4: Expansion & Factorisation": "Expansion using special identities (a+b)^2, factorisation by grouping, cross-multiplication method."
+}
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("🏆 Richard's Progress")
     st.subheader(level)
     st.write(f"**Badge:** {badge}")
-    st.write(f"**Mecha-Bot:** {bot_color} Chassis | {bot_ability}")
-    
-    next_level_xp = 1000 if xp < 1000 else 2500 if xp < 2500 else 5000 if xp < 5000 else 10000
+    next_level_xp = 1000 if xp < 1000 else 2500
     st.progress(min(xp / next_level_xp, 1.0))
     st.write(f"**XP:** {xp} / {next_level_xp}")
+    
+    st.divider()
+    st.header("🔐 Login")
+    if st.radio("Mode:", ["Student", "Developer"]) == "Developer":
+        if st.text_input("Password:", type="password") == "parent123":
+            st.session_state.is_dev = True
+            st.success("Dev Access ✅")
 
-# --- SECRETS CONNECTION ---
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
-def ask_ai(prompt):
-    response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+def ask_ai(prompt, image_data=None):
+    if image_data:
+        response = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=[prompt, image_data]
+        )
+    else:
+        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
     return response.text
 
 if "mode" not in st.session_state: st.session_state.mode = "home"
@@ -109,198 +94,173 @@ if "q_index" not in st.session_state: st.session_state.q_index = 0
 if "answers" not in st.session_state: st.session_state.answers = {}
 
 # --- DEVELOPER DASHBOARD ---
-if is_dev:
-    st.header("👨‍💻 Developer / Parent Dashboard")
-    st.write("### Detailed Mistake Log")
+if st.session_state.get("is_dev"):
+    st.header("👨‍💻 Parent Dashboard")
     try:
         all_mistakes = mistakes_sheet.get_all_records()
-        if all_mistakes:
-            for row in reversed(all_mistakes):
-                with st.expander(f"❌ {row['Question'][:50]}..."):
-                    st.write(f"**Date:** {row['Date']}")
-                    st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
-                    st.write(f"**Correct Answer:** {row['Correct_Answer']}")
-        else: st.success("No mistakes logged yet!")
-    except: st.info("No mistakes logged yet.")
+        for row in reversed(all_mistakes):
+            with st.expander(f"❌ {row['Question'][:50]}..."):
+                st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
+                st.write(f"**Correct Answer:** {row['Correct_Answer']}")
+    except: st.info("No data yet.")
 
 # --- STUDENT VIEW ---
 else:
-    with st.sidebar:
-        st.divider()
-        st.header("🎯 Choose Topic")
+    if st.session_state.mode == "home":
+        st.write("Welcome Richard! Choose your study mode:")
         
-        if st.session_state.mode in ["home", "test", "learn"]:
-            subject = st.selectbox("Subject:", list(SYLLABUS.keys()))
-            book = st.selectbox("Book / Level:", list(SYLLABUS[subject].keys()))
-            topic = st.selectbox("Chapter:", SYLLABUS[subject][book])
-            final_topic_name = f"{subject} - {book} - {topic}"
-            
-            difficulty = st.radio("Select Difficulty:", ["Standard (Normal)", "Hard Mode (Extra XP)"])
-                    
-            if st.button("📖 1. Learn this Topic"):
-                st.session_state.mode = "learn"
-                st.session_state.lesson_text = None 
-                st.session_state.current_topic = final_topic_name
-                st.session_state.test_results = None
-                st.rerun()
-            
-            if st.button("📝 2. Take the Test"):
-                st.session_state.mode = "test"
-                st.session_state.current_test = None 
-                st.session_state.current_topic = final_topic_name
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📚 Textbook Practice")
+            selected_chapter = st.selectbox("Select Chapter:", list(TEXTBOOK_CHAPTERS.keys()))
+            difficulty = st.radio("Difficulty:", ["Standard", "Hard"])
+            if st.button("Start Textbook Test"):
+                st.session_state.mode = "textbook_test"
+                st.session_state.current_topic = selected_chapter
                 st.session_state.current_difficulty = difficulty
-                st.session_state.test_results = None
+                st.session_state.current_test = None
                 st.session_state.q_index = 0
                 st.session_state.answers = {}
+                st.session_state.test_results = None
+                st.rerun()
+                
+        with col2:
+            st.subheader("📸 Homework / Test Paper")
+            st.write("Upload a photo of your worksheet, and I'll turn it into a quiz.")
+            if st.button("Upload Photo"):
+                st.session_state.mode = "upload"
                 st.rerun()
 
-    if st.session_state.mode == "home":
-        st.write("Welcome Richard! Select a Subject, Book, and Chapter on the left to begin.")
-
-    elif st.session_state.mode == "learn":
-        topic = st.session_state.current_topic
-        st.header(f"📖 Lesson: {topic}")
-        if st.session_state.get("lesson_text") is None:
-            with st.spinner("Preparing your visual lesson..."):
+    elif st.session_state.mode == "upload":
+        st.header("📸 Upload Homework")
+        uploaded_file = st.file_uploader("Choose an image", type=["jpg", "png", "jpeg"])
+        
+        if uploaded_file and st.button("Convert to Quiz"):
+            with st.spinner("Teacher is reading the page..."):
+                image_data = {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
+                prompt = """Extract the math questions from this image. 
+                Output ONLY a valid JSON dictionary.
+                Format: {"Q1": {"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A"}}
+                If there are no multiple-choice options, create 4 logical ones."""
+                
                 try:
-                    prompt = f"Explain {topic} for a Singapore Sec 2 (G3) student named Richard. Use simple language. Include a text-based diagram using emojis."
-                    st.session_state.lesson_text = ask_ai(prompt)
-                except Exception:
-                    st.error("⚠️ Google is busy. Try again.")
-                    if st.button("Try Again 🔄"): st.rerun()
-                    st.stop()
-        st.markdown(st.session_state.lesson_text)
+                    text = ask_ai(prompt, image_data).replace("```json", "").replace("```", "").strip()
+                    st.session_state.current_test = json.loads(text)
+                    st.session_state.mode = "test_display"
+                    st.rerun()
+                except:
+                    st.error("Could not read the image clearly. Try another photo.")
+                    
+        if st.button("⬅️ Back"):
+            st.session_state.mode = "home"
+            st.rerun()
 
-    elif st.session_state.mode == "test":
+    elif st.session_state.mode == "textbook_test":
         topic = st.session_state.current_topic
-        is_hard = st.session_state.get("current_difficulty") == "Hard Mode (Extra XP)"
-        st.header(f"📝 Test: {topic} ({'Hard Mode' if is_hard else 'Standard'})")
+        is_hard = st.session_state.current_difficulty == "Hard"
+        st.header(f"📝 Test: {topic} ({st.session_state.current_difficulty})")
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                with st.spinner("Teacher is generating the test (This takes ~10 seconds)..."):
-                    # GENERATE ONE BY ONE FOR 100% STABILITY
+                with st.spinner("MOE Teacher is generating questions based on your textbook..."):
                     generated_test = {}
-                    for i in range(1, 11):
+                    topic_description = TEXTBOOK_CHAPTERS[topic]
+                    
+                    for i in range(1, 6): # 5 questions
                         success = False
                         for attempt in range(3):
                             try:
-                                diff_prompt = "Make it a highly challenging MOE exam-style problem sum." if is_hard else "Make it a standard MOE practice question."
-                                prompt = f"Create ONE math multiple-choice question for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"question\": \"...\", \"options\": [\"A...\", \"B...\", \"C...\"], \"answer\": \"A\"}}"
+                                diff = "High difficulty exam-style problem sum" if is_hard else "Standard textbook practice"
+                                # THE ANCHOR PROMPT: Forces AI to stick to the textbook syllabus
+                                prompt = f"Create 1 math multiple-choice question for a Sec 2 student on the topic: '{topic_description}'. Difficulty: {diff}. Output EXACTLY this text format, no markdown:\nQuestion\nA) opt1\nB) opt2\nC) opt3\nD) opt4\nAnswer: A"
                                 
-                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                                clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                                q_data = json.loads(clean_text)
-                                generated_test[f"Q{i}"] = q_data
-                                success = True
-                                break
-                            except Exception:
-                                time.sleep(1)
+                                text = ask_ai(prompt).strip()
+                                lines = [line.strip() for line in text.split('\n') if line.strip()]
+                                
+                                if len(lines) >= 6 and lines[-1].startswith("Answer:"):
+                                    generated_test[f"Q{i}"] = {"question": lines[0], "options": lines[1:5], "answer": lines[5].split(":")[1].strip()}
+                                    success = True
+                                    break
+                            except: time.sleep(1)
+                        
                         if not success:
-                            st.error("⚠️ The AI had trouble formatting a question. Please click Try Again.")
+                            st.error("⚠️ AI is busy. Click Try Again.")
                             if st.button("Try Again 🔄"): st.rerun()
                             st.stop()
-                    
+                            
                     st.session_state.current_test = generated_test
+            st.rerun()
 
-            test_data = st.session_state.current_test
-            q_keys = list(test_data.keys())
-            total_q = len(q_keys)
-            curr_idx = st.session_state.q_index
-            
+        # DISPLAY TEST
+        test_data = st.session_state.current_test
+        q_keys = list(test_data.keys())
+        total_q = len(q_keys)
+        curr_idx = st.session_state.q_index
+        
+        if curr_idx < total_q:
             st.progress((curr_idx + 1) / total_q)
-            st.write(f"**Question {curr_idx + 1} of {total_q}**")
+            q_data = test_data[q_keys[curr_idx]]
             
-            q_key = q_keys[curr_idx]
-            q_data = test_data[q_key]
+            st.markdown(f"### Q{curr_idx + 1}: {q_data['question']}")
+            ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
+            st.session_state.answers[q_keys[curr_idx]] = ans
             
-            st.markdown(f"### {q_key}: {q_data['question']}")
-            current_ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
-            st.session_state.answers[q_key] = current_ans
-            
-            with st.popover(f"🆘 Need a hint for {q_key}?"):
-                if st.button(f"Get Hint for {q_key}", key=f"btn_hint_{curr_idx}"):
-                    with st.spinner("Thinking..."):
-                        hint_prompt = f"Give a Socratic hint for this math question without revealing the exact answer: {q_data['question']}"
-                        hint_text = ask_ai(hint_prompt)
-                        st.info(f"**Hint:** {hint_text}")
-
-            st.write("---")
-            
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if curr_idx > 0:
-                    if st.button("⬅️ Previous"):
-                        st.session_state.q_index -= 1
-                        st.rerun()
-            with col2:
-                if curr_idx < total_q - 1:
-                    if st.button("Next ➡️"):
-                        st.session_state.q_index += 1
-                        st.rerun()
+            if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
+                if "--- Select ---" in st.session_state.answers.values():
+                    st.warning("Answer all questions first!")
+                elif curr_idx < total_q - 1:
+                    st.session_state.q_index += 1
+                    st.rerun()
                 else:
-                    if st.button("Submit Test 🚀"):
-                        if "--- Select ---" in st.session_state.answers.values():
-                            st.warning("⚠️ Please answer all questions!")
-                        else:
-                            st.session_state.test_results = {"user_answers": st.session_state.answers}
-                            st.rerun()
+                    st.session_state.test_results = {"user_answers": st.session_state.answers}
+                    st.rerun()
 
-        else:
-            test_data = st.session_state.current_test
-            user_answers = st.session_state.test_results["user_answers"]
+    elif st.session_state.mode == "test_display":
+        # (Same display logic as above, just for the photo test)
+        test_data = st.session_state.current_test
+        q_keys = list(test_data.keys())
+        total_q = len(q_keys)
+        curr_idx = st.session_state.q_index
+        
+        if curr_idx < total_q:
+            st.progress((curr_idx + 1) / total_q)
+            q_data = test_data[q_keys[curr_idx]]
             
-            score, wrong_questions = 0, []
-            for q_key, q_data in test_data.items():
-                if user_answers[q_key].startswith(q_data['answer']):
-                    score += 1
+            st.markdown(f"### Q{curr_idx + 1}: {q_data['question']}")
+            ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_p_{curr_idx}")
+            st.session_state.answers[q_keys[curr_idx]] = ans
+            
+            if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
+                if "--- Select ---" in st.session_state.answers.values():
+                    st.warning("Answer all questions first!")
+                elif curr_idx < total_q - 1:
+                    st.session_state.q_index += 1
+                    st.rerun()
                 else:
-                    wrong_questions.append({"q_key": q_key, "question": q_data['question'], "correct": q_data['answer'], "options": q_data['options'], "user_ans": user_answers[q_key]})
-            
-            percentage = (score / len(test_data)) * 100
-            st.subheader(f"📊 Score: {score}/10 ({percentage:.0f}%)")
-            
-            base_xp = score * 2
-            if score == 10:
-                st.balloons()
-                st.success("🌟 FLAWLESS VICTORY! 🌟 +30 Bonus XP awarded!")
-                base_xp += 30
+                    st.session_state.test_results = {"user_answers": st.session_state.answers}
+                    st.rerun()
+
+    # --- RESULTS VIEW ---
+    if st.session_state.get("test_results") is not None:
+        test_data = st.session_state.current_test
+        user_answers = st.session_state.test_results["user_answers"]
+        
+        score = 0
+        for q_key, q_data in test_data.items():
+            if user_answers[q_key].startswith(q_data['answer']):
+                score += 1
                 
-            if is_hard:
-                base_xp += 20
-                st.info("🔥 HARD MODE BONUS: +20 XP awarded!")
-            
-            current_xp = xp + base_xp
-            save_progress(current_xp, level, badge)
-            
-            st.write(f"🏆 You earned **{base_xp} XP**!")
-            
-            if len(wrong_questions) > 0:
-                for wq in wrong_questions:
-                    correct_option = next((opt for opt in wq['options'] if opt.startswith(wq['correct'])), wq['correct'])
-                    try:
-                        mistakes_sheet.append_row([str(datetime.now()), "Mathematics", wq['question'], correct_option, wq['user_ans']])
-                    except: pass
-                
-                st.divider()
-                st.subheader("🔍 Review Mistakes & Guidance")
-                for wq in wrong_questions:
-                    with st.expander(f"❌ {wq['q_key']}: {wq['question']}"):
-                        st.write(f"**Richard's Answer:** {wq['user_ans']}")
-                        correct_option = next((opt for opt in wq['options'] if opt.startswith(wq['correct'])), wq['correct'])
-                        st.write(f"**Correct Answer:** {correct_option}")
-                        
-                        st.write("---")
-                        try:
-                            explain_prompt = f"Richard answered: {wq['user_ans']}. The correct answer is {correct_option}. Explain step-by-step why."
-                            explanation = ask_ai(explain_prompt)
-                            st.info(explanation)
-                        except: st.write("Could not load explanation.")
-            
-            if st.button("Return Home 🏠"):
-                st.session_state.mode = "home"
-                st.session_state.current_test = None
-                st.session_state.test_results = None
-                st.session_state.q_index = 0
-                st.session_state.answers = {}
-                st.rerun()
+        st.subheader(f"📊 Score: {score}/{total_q}")
+        
+        base_xp = score * 2
+        current_xp = xp + base_xp
+        save_progress(current_xp, level, badge)
+        st.write(f"🏆 You earned **{base_xp} XP**!")
+        
+        if st.button("Return Home 🏠"):
+            st.session_state.mode = "home"
+            st.session_state.current_test = None
+            st.session_state.test_results = None
+            st.session_state.q_index = 0
+            st.session_state.answers = {}
+            st.rerun()
