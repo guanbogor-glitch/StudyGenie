@@ -163,7 +163,7 @@ else:
         if st.session_state.get("lesson_text") is None:
             with st.spinner("Preparing your visual lesson..."):
                 try:
-                    prompt = f"Explain {topic} for a Singapore Sec 2 (G3) student named Richard. Use simple language. DO NOT use LaTeX formatting. Include a text-based diagram using emojis."
+                    prompt = f"Explain {topic} for a Singapore Sec 2 (G3) student named Richard. Use simple language. Include a text-based diagram using emojis."
                     st.session_state.lesson_text = ask_ai(prompt)
                 except Exception:
                     st.error("⚠️ Google is busy. Try again.")
@@ -178,27 +178,30 @@ else:
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                with st.spinner("Teacher is generating questions (Basic to Exam-Style)..."):
-                    # THE RETRY LOOP: If the AI messes up the JSON, it tries again automatically
-                    success = False
-                    for attempt in range(3):
-                        try:
-                            diff_prompt = "Make 3 basic questions, 4 intermediate, and 3 highly challenging MOE exam-style problem sums (include word problems or graph concepts if applicable)." if is_hard else "Make 5 basic and 5 intermediate questions."
-                            
-                            prompt = f"Create a 10-question multiple-choice test for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"Q1\": {{\"question\": \"...\", \"options\": [\"A) ...\", \"B) ...\", \"C) ...\", \"D) ...\"], \"answer\": \"A\"}}, \"Q2\": ...}}"
-                            
-                            response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                            clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                            st.session_state.current_test = json.loads(clean_text)
-                            success = True
-                            break
-                        except Exception:
-                            time.sleep(2) # Wait 2 seconds and try again
+                with st.spinner("Teacher is generating the test (This takes ~10 seconds)..."):
+                    # GENERATE ONE BY ONE FOR 100% STABILITY
+                    generated_test = {}
+                    for i in range(1, 11):
+                        success = False
+                        for attempt in range(3):
+                            try:
+                                diff_prompt = "Make it a highly challenging MOE exam-style problem sum." if is_hard else "Make it a standard MOE practice question."
+                                prompt = f"Create ONE math multiple-choice question for {topic}. {diff_prompt} Output ONLY valid JSON format: {{\"question\": \"...\", \"options\": [\"A...\", \"B...\", \"C...\"], \"answer\": \"A\"}}"
+                                
+                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+                                clean_text = response.text.replace("```json", "").replace("```", "").strip()
+                                q_data = json.loads(clean_text)
+                                generated_test[f"Q{i}"] = q_data
+                                success = True
+                                break
+                            except Exception:
+                                time.sleep(1)
+                        if not success:
+                            st.error("⚠️ The AI had trouble formatting a question. Please click Try Again.")
+                            if st.button("Try Again 🔄"): st.rerun()
+                            st.stop()
                     
-                    if not success:
-                        st.error("⚠️ The AI had trouble formatting the questions. Please click Try Again.")
-                        if st.button("Try Again 🔄"): st.rerun()
-                        st.stop()
+                    st.session_state.current_test = generated_test
 
             test_data = st.session_state.current_test
             q_keys = list(test_data.keys())
