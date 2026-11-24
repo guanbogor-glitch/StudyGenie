@@ -7,9 +7,9 @@ import pandas as pd
 from datetime import datetime
 import random
 import json
+import io
 import time
 from pypdf import PdfReader
-import io
 
 # --- 2026 UI THEME ---
 st.set_page_config(page_title="StudyGenie AI", page_icon="🚀", layout="wide")
@@ -24,6 +24,11 @@ st.markdown("""
 
 st.title("🚀 Richard's StudyGenie AI")
 
+# --- FOLDER SETUP ---
+QB_FOLDER = "Question_Bank"
+if not os.path.exists(QB_FOLDER):
+    os.makedirs(QB_FOLDER)
+
 # --- DATABASE CONNECTION (SAFE) ---
 @st.cache_resource
 def get_db():
@@ -34,7 +39,7 @@ def get_db():
         client = gspread.authorize(creds)
         sheet_id = "1Lo-X7A7y0UTgCJqDTiDp87YHtohxOLJF3_qnkvGvXOA" 
         return client.open_by_key(sheet_id)
-    except Exception as e:
+    except Exception:
         return None
 
 db = get_db()
@@ -62,13 +67,6 @@ def save_progress(new_xp, new_level, new_badge):
         try: progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
         except: pass
 
-TEXTBOOK_CHAPTERS = {
-    "Ch 1: Linear Graphs & Simultaneous Equations": "Graphs of linear equations, solving simultaneous equations by substitution and elimination.",
-    "Ch 2: Linear Inequalities": "Solving simple linear inequalities, number lines.",
-    "Ch 3: Algebraic Expressions": "Addition and subtraction of algebraic expressions.",
-    "Ch 4: Expansion & Factorisation": "Expansion using identities, factorisation."
-}
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("🏆 Richard's Progress")
@@ -78,7 +76,7 @@ with st.sidebar:
     st.write(f"**XP:** {xp} / 1000")
     
     if not db:
-        st.warning("⚠️ Database offline. XP will not save.")
+        st.warning("⚠️ Database offline.")
     
     st.divider()
     st.header("🔐 Login")
@@ -90,11 +88,6 @@ with st.sidebar:
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
-def ask_ai(prompt, use_pro=False):
-    model = "gemini-2.5-pro" if use_pro else "gemini-3.5-flash-lite"
-    response = client.models.generate_content(model=model, contents=prompt)
-    return response.text
-
 if "mode" not in st.session_state: st.session_state.mode = "home"
 if "q_index" not in st.session_state: st.session_state.q_index = 0
 if "answers" not in st.session_state: st.session_state.answers = {}
@@ -102,16 +95,46 @@ if "answers" not in st.session_state: st.session_state.answers = {}
 # --- DEVELOPER DASHBOARD ---
 if st.session_state.get("is_dev"):
     st.header("👨‍💻 Parent Dashboard")
-    if mistakes_sheet:
-        try:
-            all_mistakes = mistakes_sheet.get_all_records()
-            for row in reversed(all_mistakes):
-                with st.expander(f"❌ {row['Question'][:50]}..."):
-                    st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
-                    st.write(f"**Correct Answer:** {row['Correct_Answer']}")
-        except: st.info("No data yet.")
-    else:
-        st.warning("Database offline. Cannot load mistakes.")
+    
+    tab1, tab2, tab3 = st.tabs(["📚 Question Bank Upload", "❌ Mistake Log", "⚙️ Settings"])
+    
+    with tab1:
+        st.write("Upload real MOE exam papers (PDFs) here. The AI will learn the style and generate similar questions.")
+        uploaded_papers = st.file_uploader("Upload Exam Papers", type=["pdf"], accept_multiple_files=True)
+        
+        if st.button("Save to Question Bank"):
+            if uploaded_papers:
+                for paper in uploaded_papers:
+                    with open(os.path.join(QB_FOLDER, paper.name), "wb") as f:
+                        f.write(paper.getbuffer())
+                st.success(f"Saved {len(uploaded_papers)} papers to the Question Bank!")
+                st.rerun()
+        
+        st.write("### Current Question Bank:")
+        files = os.listdir(QB_FOLDER)
+        if files:
+            for file in files:
+                st.write(f"- {file}")
+        else:
+            st.info("No papers uploaded yet.")
+            
+    with tab2:
+        if mistakes_sheet:
+            try:
+                all_mistakes = mistakes_sheet.get_all_records()
+                for row in reversed(all_mistakes):
+                    with st.expander(f"❌ {row['Question'][:50]}..."):
+                        st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
+                        st.write(f"**Correct Answer:** {row['Correct_Answer']}")
+            except: st.info("No data yet.")
+        else:
+            st.warning("Database offline.")
+
+    with tab3:
+        st.write("### Database Status")
+        st.write(f"Database Connection: {'✅ Online' if db else '❌ Offline'}")
+        st.write("### API Status")
+        st.write(f"Gemini API Key: {'✅ Loaded' if api_key else '❌ Missing'}")
 
 # --- STUDENT VIEW ---
 else:
@@ -120,13 +143,10 @@ else:
         
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("📚 Textbook Practice")
-            selected_chapter = st.selectbox("Select Chapter:", list(TEXTBOOK_CHAPTERS.keys()))
-            difficulty = st.radio("Difficulty:", ["Standard", "Hard"])
-            if st.button("Start Textbook Test"):
+            st.subheader("📚 Smart Question Bank Test")
+            st.write("The AI will generate a test based on real exam papers uploaded by your Dad.")
+            if st.button("Start AI Test"):
                 st.session_state.mode = "textbook_test"
-                st.session_state.current_topic = selected_chapter
-                st.session_state.current_difficulty = difficulty
                 st.session_state.current_test = None
                 st.session_state.q_index = 0
                 st.session_state.answers = {}
@@ -134,93 +154,98 @@ else:
                 st.rerun()
                 
         with col2:
-            st.subheader("📸 Homework / Test Paper")
-            if st.button("Upload File (PDF/Photo)"):
+            st.subheader("📸 Homework Helper")
+            if st.button("Upload Homework (PDF/Photo)"):
                 st.session_state.mode = "upload"
                 st.rerun()
 
     elif st.session_state.mode == "upload":
-        st.header("📸 Upload Homework (PDF or Image)")
+        st.header("📸 Upload Homework")
         uploaded_file = st.file_uploader("Choose a file", type=["pdf", "jpg", "png", "jpeg"])
         
-        if uploaded_file and st.button("Convert to Quiz"):
+        if uploaded_file and st.button("Explain this to me"):
             with st.spinner("Teacher is reading the document..."):
-                prompt = """Extract the math questions from this document. Output ONLY a valid JSON dictionary. Format: {"Q1": {"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A"}}"""
                 try:
                     if uploaded_file.type == "application/pdf":
-                        # Extract text from PDF using Python first
                         reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
-                        extracted_text = ""
-                        for page in reader.pages[:5]: # Read first 5 pages
-                            extracted_text += page.extract_text() + "\n"
-                        
-                        text = ask_ai(f"{prompt}\n\nHere is the text from the document:\n{extracted_text}", use_pro=True)
+                        extracted_text = "".join([page.extract_text() + "\n" for page in reader.pages[:3]])
+                        prompt = f"Explain step-by-step how to solve the problems in this text:\n{extracted_text}"
+                        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+                        st.info(response.text)
                     else:
-                        # It's an image, use AI Vision
-                        image_data = {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
-                        response = client.models.generate_content(
-                            model="gemini-2.5-pro",
-                            contents=[prompt, image_data]
-                        )
-                        text = response.text
-                        
-                    clean_text = text.replace("```json", "").replace("```", "").strip()
-                    st.session_state.current_test = json.loads(clean_text)
-                    st.session_state.mode = "test_display"
-                    st.rerun()
+                        st.warning("Image processing is temporarily disabled to save costs. Please upload a PDF.")
                 except Exception as e:
-                    st.error(f"Could not read the file clearly. Error: {str(e)[:100]}")
+                    st.error("Error reading file.")
                     
         if st.button("⬅️ Back"):
             st.session_state.mode = "home"
             st.rerun()
 
     elif st.session_state.mode == "textbook_test":
-        topic = st.session_state.current_topic
-        is_hard = st.session_state.current_difficulty == "Hard"
-        st.header(f"📝 Test: {topic} ({st.session_state.current_difficulty})")
+        st.header("📝 Smart AI Test (Based on Real Exam Papers)")
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
-                with st.spinner("MOE Teacher is preparing your test..."):
-                    generated_test = {}
-                    topic_desc = TEXTBOOK_CHAPTERS[topic]
+                with st.spinner("Teacher is reading past papers and generating MOE questions..."):
+                    # 1. READ TEXT FROM QUESTION BANK PDFs
+                    context_text = ""
+                    files = os.listdir(QB_FOLDER)
+                    if not files:
+                        st.error("⚠️ No exam papers found in the Question Bank. Ask your Dad to upload them in Developer Mode!")
+                        if st.button("⬅️ Back to Home"): 
+                            st.session_state.mode = "home"
+                            st.rerun()
+                        st.stop()
                     
-                    # 4 Stable Python Questions
-                    for i in range(1, 5):
-                        a = random.randint(2, 5); b = random.randint(1, 5); x = random.randint(2, 10)
-                        eq = f"Solve the linear equation:\n\n{a}(x + {b}) = {a*(x+b)}"
-                        ans = f"x = {x}"
-                        options = [ans]
-                        while len(options) < 4:
-                            wx = x + random.choice([-2, -1, 1, 2])
-                            wrong_ans = f"x = {wx}"
-                            if wrong_ans not in options: options.append(wrong_ans)
-                        random.shuffle(options)
-                        letters = ["A", "B", "C", "D"]
-                        generated_test[f"Q{i}"] = {"question": eq, "options": [f"{letters[j]}) {options[j]}" for j in range(4)], "answer": letters[options.index(ans)]}
-
-                    # 1 Smart AI Question
-                    success = False
-                    for attempt in range(3):
+                    for file in files[:3]: # Read up to 3 papers to avoid token limits
                         try:
-                            prompt = f"Create ONE math multiple-choice question for a Sec 2 student on the topic: '{topic_desc}'. Difficulty: {'Hard exam-style' if is_hard else 'Standard'}. Output EXACTLY this text format, no markdown:\nQuestion\nA) opt1\nB) opt2\nC) opt3\nD) opt4\nAnswer: A"
-                            text = ask_ai(prompt, use_pro=True).strip()
-                            lines = [line.strip() for line in text.split('\n') if line.strip()]
-                            
-                            if len(lines) >= 6 and lines[-1].startswith("Answer:"):
-                                generated_test["Q5"] = {"question": lines[0], "options": lines[1:5], "answer": lines[5].split(":")[1].strip()}
-                                success = True
-                                break
-                        except Exception:
-                            time.sleep(2)
+                            reader = PdfReader(os.path.join(QB_FOLDER, file))
+                            for page in reader.pages[:3]: # Read first 3 pages of each
+                                context_text += page.extract_text() + "\n"
+                        except: pass
                     
-                    if not success:
-                        generated_test["Q5"] = {"question": "Solve: 3x + 5 = 20", "options": ["A) x = 5", "B) x = 4", "C) x = 6", "D) x = 7"], "answer": "A"}
+                    # 2. GENERATE QUESTIONS USING AI (TEXT FORMAT FOR STABILITY)
+                    generated_test = {}
+                    for i in range(1, 6):
+                        success = False
+                        for attempt in range(5):
+                            try:
+                                prompt = f"""Here are real MOE exam questions:
+                                {context_text}
+                                
+                                Create ONE new multiple-choice question with the exact same style and difficulty. 
+                                Output EXACTLY this text format, no markdown:
+                                Question
+                                A) opt1
+                                B) opt2
+                                C) opt3
+                                D) opt4
+                                Answer: A"""
+                                
+                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
+                                text = response.text.strip()
+                                lines = [line.strip() for line in text.split('\n') if line.strip()]
+                                
+                                if len(lines) >= 6 and lines[-1].startswith("Answer:"):
+                                    generated_test[f"Q{i}"] = {
+                                        "question": lines[0],
+                                        "options": lines[1:5],
+                                        "answer": lines[5].split(":")[1].strip()
+                                    }
+                                    success = True
+                                    break
+                            except Exception:
+                                time.sleep(1)
+                                
+                        if not success:
+                            st.error("⚠️ AI is struggling to format the questions. Please try again.")
+                            if st.button("Try Again 🔄"): st.rerun()
+                            st.stop()
                             
                     st.session_state.current_test = generated_test
             st.rerun()
 
+        # DISPLAY TEST
         test_data = st.session_state.current_test
         q_keys = list(test_data.keys())
         total_q = len(q_keys)
@@ -232,30 +257,6 @@ else:
             
             st.markdown(f"### Q{curr_idx + 1}: {q_data['question']}")
             ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
-            st.session_state.answers[q_keys[curr_idx]] = ans
-            
-            if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
-                if "--- Select ---" in st.session_state.answers.values():
-                    st.warning("Answer all questions first!")
-                elif curr_idx < total_q - 1:
-                    st.session_state.q_index += 1
-                    st.rerun()
-                else:
-                    st.session_state.test_results = {"user_answers": st.session_state.answers}
-                    st.rerun()
-
-    elif st.session_state.mode == "test_display":
-        test_data = st.session_state.current_test
-        q_keys = list(test_data.keys())
-        total_q = len(q_keys)
-        curr_idx = st.session_state.q_index
-        
-        if curr_idx < total_q:
-            st.progress((curr_idx + 1) / total_q)
-            q_data = test_data[q_keys[curr_idx]]
-            
-            st.markdown(f"### Q{curr_idx + 1}: {q_data['question']}")
-            ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_p_{curr_idx}")
             st.session_state.answers[q_keys[curr_idx]] = ans
             
             if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
