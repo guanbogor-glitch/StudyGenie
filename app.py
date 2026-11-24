@@ -24,11 +24,6 @@ st.markdown("""
 
 st.title("🚀 Richard's StudyGenie AI")
 
-# --- FOLDER SETUP ---
-QB_FOLDER = "Question_Bank"
-if not os.path.exists(QB_FOLDER):
-    os.makedirs(QB_FOLDER)
-
 # --- DATABASE CONNECTION (SAFE) ---
 @st.cache_resource
 def get_db():
@@ -99,25 +94,34 @@ if st.session_state.get("is_dev"):
     tab1, tab2, tab3 = st.tabs(["📚 Question Bank Upload", "❌ Mistake Log", "⚙️ Settings"])
     
     with tab1:
-        st.write("Upload real MOE exam papers (PDFs) here. The AI will learn the style and generate similar questions.")
-        uploaded_papers = st.file_uploader("Upload Exam Papers", type=["pdf"], accept_multiple_files=True)
+        st.write("Upload the 18 exam papers here. The AI will extract the text and save it to the cloud server.")
+        uploaded_papers = st.file_uploader("Upload Exam Papers (PDFs)", type=["pdf"], accept_multiple_files=True)
         
-        if st.button("Save to Question Bank"):
+        if st.button("Process and Save to Question Bank"):
             if uploaded_papers:
-                for paper in uploaded_papers:
-                    with open(os.path.join(QB_FOLDER, paper.name), "wb") as f:
-                        f.write(paper.getbuffer())
-                st.success(f"Saved {len(uploaded_papers)} papers to the Question Bank!")
-                st.rerun()
+                with st.spinner("Extracting text from PDFs... This may take a minute."):
+                    all_text = ""
+                    for paper in uploaded_papers:
+                        try:
+                            reader = PdfReader(io.BytesIO(paper.getvalue()))
+                            for page in reader.pages[:4]: # Read first 4 pages of each paper
+                                all_text += page.extract_text() + "\n"
+                        except Exception as e:
+                            st.warning(f"Could not read {paper.name}")
+                    
+                    # Save the text to a local file on the server
+                    with open("bank_text.txt", "w", encoding="utf-8") as f:
+                        f.write(all_text)
+                    st.success(f"Saved text from {len(uploaded_papers)} papers to the Question Bank!")
+                    st.rerun()
         
-        st.write("### Current Question Bank:")
-        files = os.listdir(QB_FOLDER)
-        if files:
-            for file in files:
-                st.write(f"- {file}")
+        st.write("### Current Question Bank Status:")
+        if os.path.exists("bank_text.txt"):
+            size = os.path.getsize("bank_text.txt")
+            st.success(f"✅ Question Bank is loaded ({size} bytes of text).")
         else:
             st.info("No papers uploaded yet.")
-            
+
     with tab2:
         if mistakes_sheet:
             try:
@@ -143,8 +147,8 @@ else:
         
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("📚 Smart Question Bank Test")
-            st.write("The AI will generate a test based on real exam papers uploaded by your Dad.")
+            st.subheader("📚 Smart Exam Practice")
+            st.write("The AI will generate a test based on real exam papers.")
             if st.button("Start AI Test"):
                 st.session_state.mode = "textbook_test"
                 st.session_state.current_test = None
@@ -173,7 +177,7 @@ else:
                         response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
                         st.info(response.text)
                     else:
-                        st.warning("Image processing is temporarily disabled to save costs. Please upload a PDF.")
+                        st.warning("Image processing is temporarily disabled. Please upload a PDF.")
                 except Exception as e:
                     st.error("Error reading file.")
                     
@@ -186,31 +190,29 @@ else:
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
+                
+                # Check if Bank exists
+                if not os.path.exists("bank_text.txt"):
+                    st.error("⚠️ No exam papers found in the Question Bank. Ask your Dad to upload them in Developer Mode!")
+                    if st.button("⬅️ Back to Home"): 
+                        st.session_state.mode = "home"
+                        st.rerun()
+                    st.stop()
+                
                 with st.spinner("Teacher is reading past papers and generating MOE questions..."):
-                    # 1. READ TEXT FROM QUESTION BANK PDFs
-                    context_text = ""
-                    files = os.listdir(QB_FOLDER)
-                    if not files:
-                        st.error("⚠️ No exam papers found in the Question Bank. Ask your Dad to upload them in Developer Mode!")
-                        if st.button("⬅️ Back to Home"): 
-                            st.session_state.mode = "home"
-                            st.rerun()
-                        st.stop()
+                    # Read the text from the Question Bank
+                    with open("bank_text.txt", "r", encoding="utf-8") as f:
+                        context_text = f.read()
                     
-                    for file in files[:3]: # Read up to 3 papers to avoid token limits
-                        try:
-                            reader = PdfReader(os.path.join(QB_FOLDER, file))
-                            for page in reader.pages[:3]: # Read first 3 pages of each
-                                context_text += page.extract_text() + "\n"
-                        except: pass
+                    # Limit context to avoid token limits (just grab a chunk)
+                    context_text = context_text[:15000] 
                     
-                    # 2. GENERATE QUESTIONS USING AI (TEXT FORMAT FOR STABILITY)
                     generated_test = {}
                     for i in range(1, 6):
                         success = False
                         for attempt in range(5):
                             try:
-                                prompt = f"""Here are real MOE exam questions:
+                                prompt = f"""Here are snippets of real MOE exam papers:
                                 {context_text}
                                 
                                 Create ONE new multiple-choice question with the exact same style and difficulty. 
