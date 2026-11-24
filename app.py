@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from google import genai
+from google.genai import types
 import os
 import pandas as pd
 from datetime import datetime
@@ -10,6 +11,7 @@ import json
 import io
 import time
 from pypdf import PdfReader
+from PIL import Image
 
 # --- 2026 UI THEME ---
 st.set_page_config(page_title="StudyGenie AI", page_icon="🚀", layout="wide")
@@ -24,7 +26,7 @@ st.markdown("""
 
 st.title("🚀 Richard's StudyGenie AI")
 
-# --- DATABASE CONNECTION (SAFE) ---
+# --- DATABASE CONNECTION (SAFE & PERSISTENT) ---
 @st.cache_resource
 def get_db():
     try:
@@ -33,25 +35,29 @@ def get_db():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet_id = "1Lo-X7A7y0UTgCJqDTiDp87YHtohxOLJF3_qnkvGvXOA" 
-        return client.open_by_key(sheet_id)
-    except Exception:
-        return None
+        spreadsheet = client.open_by_key(sheet_id)
+        
+        # Auto-create tabs if they don't exist
+        try: progress_sheet = spreadsheet.worksheet("Progress")
+        except: progress_sheet = spreadsheet.add_worksheet(title="Progress", rows="10", cols="6")
+        
+        try: mistakes_sheet = spreadsheet.worksheet("Mistakes")
+        except: mistakes_sheet = spreadsheet.add_worksheet(title="Mistakes", rows="1000", cols="5")
+            
+        return spreadsheet, progress_sheet, mistakes_sheet
+    except Exception as e:
+        return None, None, None
 
-db = get_db()
-if db:
+db, progress_sheet, mistakes_sheet = get_db()
+
+if db and progress_sheet:
     try:
-        progress_sheet = db.worksheet("Progress")
-        mistakes_sheet = db.worksheet("Mistakes")
         richard_data = progress_sheet.row_values(2)
         xp = int(richard_data[1]) if len(richard_data) > 1 and richard_data[1] else 0
     except:
         xp = 0
-        progress_sheet = None
-        mistakes_sheet = None
 else:
     xp = 0
-    progress_sheet = None
-    mistakes_sheet = None
 
 if xp < 1000: level, badge = "Level 1: Novice 🌱", "🥉 Bronze Scout"
 elif xp < 2500: level, badge = "Level 2: Apprentice 📖", "🥈 Silver Explorer"
@@ -62,7 +68,7 @@ def save_progress(new_xp, new_level, new_badge):
         try: progress_sheet.update('B2:D2', [[new_xp, new_level, new_badge]])
         except: pass
 
-# --- SIDEBAR ---
+# --- LOGIN SYSTEM ---
 with st.sidebar:
     st.header("🏆 Richard's Progress")
     st.subheader(level)
@@ -70,57 +76,105 @@ with st.sidebar:
     st.progress(min(xp / 1000.0, 1.0))
     st.write(f"**XP:** {xp} / 1000")
     
-    if not db:
-        st.warning("⚠️ Database offline.")
-    
     st.divider()
     st.header("🔐 Login")
-    if st.radio("Mode:", ["Student", "Developer"]) == "Developer":
+    user_mode = st.radio("Mode:", ["Student", "Developer"])
+    if user_mode == "Developer":
         if st.text_input("Password:", type="password") == "parent123":
             st.session_state.is_dev = True
             st.success("Dev Access ✅")
+        else:
+            st.session_state.is_dev = False
+    else:
+        st.session_state.is_dev = False
 
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
+# --- JSON EXTRACTION & GRADING FUNCTION ---
+def process_uploaded_file(uploaded_file, is_grading=False):
+    """Uses Gemini Pro to extract structured JSON from an image or PDF."""
+    
+    # 1. Prepare the file data
+    file_bytes = uploaded_file.getvalue()
+    mime_type = uploaded_file.type
+    
+    if mime_type == "application/pdf":
+        reader = PdfReader(io.BytesIO(file_bytes))
+        # Extract text from first 3 pages for prompt context
+        text_content = "".join([page.extract_text() + "\n" for page in reader.pages[:3]])
+        prompt = f"Extract all questions, options, and the correct answers from this text:\n{text_content}"
+        contents = [prompt]
+    else:
+        # It's an image (JPG, PNG)
+        img = Image.open(io.BytesIO(file_bytes))
+        prompt = "Read the handwritten or printed math questions in this image."
+        contents = [prompt, img]
+        
+    if is_grading:
+        prompt += """
+        You are an MOE teacher grading a student's work. 
+        For each question, identify the student's handwritten answer, the correct answer, and provide a brief, encouraging feedback.
+        """
+    else:
+        prompt += """
+        Extract the questions, options (if any), and the correct answer.
+        """
+        
+    prompt += """
+    Output ONLY a valid JSON array matching this structure:
+    [
+        {
+            "question": "...",
+            "student_answer": "...", // Leave blank if not grading
+            "correct_answer": "...",
+            "is_correct": true/false, // Only if grading
+            "feedback": "..." // Only if grading
+        }
+    ]
+    """
+
+    # 2. Call Gemini Pro with JSON schema enforcement
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-pro',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            )
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        return {"error": str(e)}
+
 if "mode" not in st.session_state: st.session_state.mode = "home"
-if "q_index" not in st.session_state: st.session_state.q_index = 0
-if "answers" not in st.session_state: st.session_state.answers = {}
 
 # --- DEVELOPER DASHBOARD ---
 if st.session_state.get("is_dev"):
     st.header("👨‍💻 Parent Dashboard")
     
-    tab1, tab2, tab3 = st.tabs(["📚 Question Bank Upload", "❌ Mistake Log", "⚙️ Settings"])
+    tab1, tab2 = st.tabs(["📚 Upload Question Bank", "❌ Mistake Log"])
     
     with tab1:
-        st.write("Upload the 18 exam papers here. The AI will extract the text and save it to the cloud server.")
-        uploaded_papers = st.file_uploader("Upload Exam Papers (PDFs)", type=["pdf"], accept_multiple_files=True)
+        st.write("Upload exam papers or textbook pages. The AI will extract the questions into JSON format for the bank.")
+        uploaded_papers = st.file_uploader("Upload PDFs/Images", type=["pdf", "jpg", "png", "jpeg"], accept_multiple_files=True)
         
-        if st.button("Process and Save to Question Bank"):
+        if st.button("Extract & Save"):
             if uploaded_papers:
-                with st.spinner("Extracting text from PDFs... This may take a minute."):
-                    all_text = ""
+                with st.spinner("AI is extracting questions..."):
+                    all_extracted = []
                     for paper in uploaded_papers:
-                        try:
-                            reader = PdfReader(io.BytesIO(paper.getvalue()))
-                            for page in reader.pages[:4]: # Read first 4 pages of each paper
-                                all_text += page.extract_text() + "\n"
-                        except Exception as e:
-                            st.warning(f"Could not read {paper.name}")
+                        result = process_uploaded_file(paper, is_grading=False)
+                        if isinstance(result, list):
+                            all_extracted.extend(result)
                     
-                    # Save the text to a local file on the server
-                    with open("bank_text.txt", "w", encoding="utf-8") as f:
-                        f.write(all_text)
-                    st.success(f"Saved text from {len(uploaded_papers)} papers to the Question Bank!")
-                    st.rerun()
-        
-        st.write("### Current Question Bank Status:")
-        if os.path.exists("bank_text.txt"):
-            size = os.path.getsize("bank_text.txt")
-            st.success(f"✅ Question Bank is loaded ({size} bytes of text).")
-        else:
-            st.info("No papers uploaded yet.")
+                    # Save to a local file for now (or could push to Google Sheets)
+                    with open("bank_json.json", "w") as f:
+                        json.dump(all_extracted, f)
+                    
+                    st.success(f"Successfully extracted {len(all_extracted)} questions!")
+                    st.json(all_extracted[:2]) # Preview first 2
 
     with tab2:
         if mistakes_sheet:
@@ -131,14 +185,6 @@ if st.session_state.get("is_dev"):
                         st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
                         st.write(f"**Correct Answer:** {row['Correct_Answer']}")
             except: st.info("No data yet.")
-        else:
-            st.warning("Database offline.")
-
-    with tab3:
-        st.write("### Database Status")
-        st.write(f"Database Connection: {'✅ Online' if db else '❌ Offline'}")
-        st.write("### API Status")
-        st.write(f"Gemini API Key: {'✅ Loaded' if api_key else '❌ Missing'}")
 
 # --- STUDENT VIEW ---
 else:
@@ -147,151 +193,62 @@ else:
         
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("📚 Smart Exam Practice")
-            st.write("The AI will generate a test based on real exam papers.")
-            if st.button("Start AI Test"):
-                st.session_state.mode = "textbook_test"
-                st.session_state.current_test = None
-                st.session_state.q_index = 0
-                st.session_state.answers = {}
-                st.session_state.test_results = None
+            st.subheader("📸 Submit Homework for Grading")
+            st.write("Take a photo of your completed homework, and I will mark it and explain your mistakes!")
+            if st.button("Upload Homework"):
+                st.session_state.mode = "upload_hw"
                 st.rerun()
                 
         with col2:
-            st.subheader("📸 Homework Helper")
-            if st.button("Upload Homework (PDF/Photo)"):
-                st.session_state.mode = "upload"
+            st.subheader("📚 Practice Test")
+            st.write("Test your knowledge based on the Question Bank.")
+            if st.button("Start AI Test"):
+                st.session_state.mode = "practice"
                 st.rerun()
 
-    elif st.session_state.mode == "upload":
-        st.header("📸 Upload Homework")
-        uploaded_file = st.file_uploader("Choose a file", type=["pdf", "jpg", "png", "jpeg"])
+    elif st.session_state.mode == "upload_hw":
+        st.header("📸 Homework Auto-Grading")
+        uploaded_file = st.file_uploader("Upload a photo of your work (JPG/PNG) or PDF", type=["pdf", "jpg", "png", "jpeg"])
         
-        if uploaded_file and st.button("Explain this to me"):
-            with st.spinner("Teacher is reading the document..."):
-                try:
-                    if uploaded_file.type == "application/pdf":
-                        reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
-                        extracted_text = "".join([page.extract_text() + "\n" for page in reader.pages[:3]])
-                        prompt = f"Explain step-by-step how to solve the problems in this text:\n{extracted_text}"
-                        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                        st.info(response.text)
-                    else:
-                        st.warning("Image processing is temporarily disabled. Please upload a PDF.")
-                except Exception as e:
-                    st.error("Error reading file.")
+        if uploaded_file and st.button("Grade My Work"):
+            with st.spinner("Teacher is reading your handwriting and grading..."):
+                result = process_uploaded_file(uploaded_file, is_grading=True)
+                
+                if isinstance(result, dict) and "error" in result:
+                    st.error(f"Could not read the file. Error: {result['error']}")
+                else:
+                    st.success("Grading complete!")
+                    score = 0
+                    total = len(result)
+                    
+                    for i, item in enumerate(result):
+                        is_correct = item.get("is_correct", False)
+                        if is_correct: score += 1
+                        
+                        # Log mistakes to Google Sheets
+                        if not is_correct and mistakes_sheet:
+                            try:
+                                mistakes_sheet.append_row([str(datetime.now()), "Homework", item.get("question", ""), item.get("correct_answer", ""), item.get("student_answer", "")])
+                            except: pass
+                            
+                        with st.expander(f"Q{i+1}: {item.get('question', '')} - {'✅ Correct' if is_correct else '❌ Incorrect'}"):
+                            st.write(f"**Your Answer:** {item.get('student_answer', '')}")
+                            st.write(f"**Correct Answer:** {item.get('correct_answer', '')}")
+                            st.info(f"**Teacher's Feedback:** {item.get('feedback', '')}")
+                    
+                    # Award XP
+                    xp_earned = score * 5
+                    current_xp = xp + xp_earned
+                    save_progress(current_xp, level, badge)
+                    st.write(f"### 🏆 You earned **{xp_earned} XP**! (Score: {score}/{total})")
                     
         if st.button("⬅️ Back"):
             st.session_state.mode = "home"
             st.rerun()
 
-    elif st.session_state.mode == "textbook_test":
-        st.header("📝 Smart AI Test (Based on Real Exam Papers)")
-        
-        if st.session_state.get("test_results") is None:
-            if st.session_state.get("current_test") is None:
-                
-                # Check if Bank exists
-                if not os.path.exists("bank_text.txt"):
-                    st.error("⚠️ No exam papers found in the Question Bank. Ask your Dad to upload them in Developer Mode!")
-                    if st.button("⬅️ Back to Home"): 
-                        st.session_state.mode = "home"
-                        st.rerun()
-                    st.stop()
-                
-                with st.spinner("Teacher is reading past papers and generating MOE questions..."):
-                    # Read the text from the Question Bank
-                    with open("bank_text.txt", "r", encoding="utf-8") as f:
-                        context_text = f.read()
-                    
-                    # Limit context to avoid token limits (just grab a chunk)
-                    context_text = context_text[:15000] 
-                    
-                    generated_test = {}
-                    for i in range(1, 6):
-                        success = False
-                        for attempt in range(5):
-                            try:
-                                prompt = f"""Here are snippets of real MOE exam papers:
-                                {context_text}
-                                
-                                Create ONE new multiple-choice question with the exact same style and difficulty. 
-                                Output EXACTLY this text format, no markdown:
-                                Question
-                                A) opt1
-                                B) opt2
-                                C) opt3
-                                D) opt4
-                                Answer: A"""
-                                
-                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                                text = response.text.strip()
-                                lines = [line.strip() for line in text.split('\n') if line.strip()]
-                                
-                                if len(lines) >= 6 and lines[-1].startswith("Answer:"):
-                                    generated_test[f"Q{i}"] = {
-                                        "question": lines[0],
-                                        "options": lines[1:5],
-                                        "answer": lines[5].split(":")[1].strip()
-                                    }
-                                    success = True
-                                    break
-                            except Exception:
-                                time.sleep(1)
-                                
-                        if not success:
-                            st.error("⚠️ AI is struggling to format the questions. Please try again.")
-                            if st.button("Try Again 🔄"): st.rerun()
-                            st.stop()
-                            
-                    st.session_state.current_test = generated_test
-            st.rerun()
-
-        # DISPLAY TEST
-        test_data = st.session_state.current_test
-        q_keys = list(test_data.keys())
-        total_q = len(q_keys)
-        curr_idx = st.session_state.q_index
-        
-        if curr_idx < total_q:
-            st.progress((curr_idx + 1) / total_q)
-            q_data = test_data[q_keys[curr_idx]]
-            
-            st.markdown(f"### Q{curr_idx + 1}: {q_data['question']}")
-            ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
-            st.session_state.answers[q_keys[curr_idx]] = ans
-            
-            if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
-                if "--- Select ---" in st.session_state.answers.values():
-                    st.warning("Answer all questions first!")
-                elif curr_idx < total_q - 1:
-                    st.session_state.q_index += 1
-                    st.rerun()
-                else:
-                    st.session_state.test_results = {"user_answers": st.session_state.answers}
-                    st.rerun()
-
-    # --- RESULTS VIEW ---
-    if st.session_state.get("test_results") is not None:
-        test_data = st.session_state.current_test
-        user_answers = st.session_state.test_results["user_answers"]
-        
-        score = 0
-        for q_key, q_data in test_data.items():
-            if user_answers[q_key].startswith(q_data['answer']):
-                score += 1
-                
-        st.subheader(f"📊 Score: {score}/{total_q}")
-        
-        base_xp = score * 2
-        current_xp = xp + base_xp
-        save_progress(current_xp, level, badge)
-        st.write(f"🏆 You earned **{base_xp} XP**!")
-        
-        if st.button("Return Home 🏠"):
+    elif st.session_state.mode == "practice":
+        st.header("📚 Practice Test")
+        st.write("Coming soon: This will pull questions from the extracted Question Bank JSON.")
+        if st.button("⬅️ Back"):
             st.session_state.mode = "home"
-            st.session_state.current_test = None
-            st.session_state.test_results = None
-            st.session_state.q_index = 0
-            st.session_state.answers = {}
             st.rerun()
