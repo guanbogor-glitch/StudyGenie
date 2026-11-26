@@ -144,12 +144,37 @@ if st.session_state.get("is_dev"):
     with tab2:
         st.subheader("☁️ Files in Cloud Database")
         if db_fs:
-            docs = db_fs.collection("materials").stream()
-            for doc in docs:
-                data = doc.to_dict()
-                st.write(f"- **{data['subject']}** | {data['chapter']} | {data['type']} | `{data['file_name']}`")
+            docs = list(db_fs.collection("materials").stream())
+            
+            if not docs:
+                st.info("No materials found.")
+            else:
+                for doc in docs:
+                    data = doc.to_dict()
+                    
+                    # Create columns for the file info and the delete button
+                    col1, col2 = st.columns([5, 1])
+                    
+                    with col1:
+                        st.write(f"**{data.get('subject')}** | {data.get('chapter')} | {data.get('type')} | `{data.get('file_name')}`")
+                    
+                    with col2:
+                        # The Delete Button
+                        if st.button("🗑️", key=f"del_{doc.id}"):
+                            try:
+                                # 1. Delete from Cloud Storage
+                                blob = bucket.blob(data['gcs_path'])
+                                blob.delete()
+                                
+                                # 2. Delete from Firestore
+                                db_fs.collection("materials").document(doc.id).delete()
+                                
+                                st.success("File deleted!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
         else:
-            st.info("No materials found.")
+            st.info("Database connection error.")
             
     with tab3:
         if mistakes_sheet:
