@@ -5,3 +5,5 @@ pandas
 gspread
 oauth2client
 pypdf
+google-cloud-storage
+google-cloud-firestore
