@@ -77,7 +77,12 @@ def get_sheets():
 progress_sheet, mistakes_sheet, work_log_sheet = get_sheets()
 
 api_key = st.secrets["GEMINI_API_KEY"]
-client = genai.Client(api_key=api_key)
+
+# 🔥 THE MAGIC FIX: Forcing the API to use v1beta
+client = genai.Client(
+    api_key=api_key,
+    http_options={'api_version': 'v1beta'}
+)
 
 # --- TEMPORARY MODEL CHECKER ---
 if st.sidebar.button("🔍 List Available Models"):
@@ -297,14 +302,14 @@ else:
                         reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
                         text = "".join([page.extract_text() for page in reader.pages])
                         response = client.models.generate_content(
-                            model="gemini-1.5-pro",
+                            model="gemini-1.5-flash",
                             contents=[prompt, f"Here is the text:\n{text}"],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                     else:
                         img = Image.open(io.BytesIO(uploaded_file.getvalue()))
                         response = client.models.generate_content(
-                            model="gemini-1.5-pro",
+                            model="gemini-1.5-flash",
                             contents=[prompt, img],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -375,7 +380,7 @@ else:
                     
                     try:
                         response = client.models.generate_content(
-                            model="gemini-1.5-pro",
+                            model="gemini-1.5-flash",
                             contents=prompt,
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -419,7 +424,7 @@ else:
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking..."):
                             hint_prompt = f"Give a Socratic hint for this question without revealing the answer: {q_data['question']}"
-                            hint_res = client.models.generate_content(model="gemini-1.5-pro", contents=hint_prompt)
+                            hint_res = client.models.generate_content(model="gemini-1.5-flash", contents=hint_prompt)
                             st.info(f"**Hint:** {hint_res.text}")
                             
                 if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
