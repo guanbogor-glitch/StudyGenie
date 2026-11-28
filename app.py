@@ -82,7 +82,6 @@ def ask_ai(prompt, config=None):
 # ==========================================
 # 2. XP & HELPER FUNCTIONS
 # ==========================================
-# Fetch XP (only if not in test mode)
 xp = 0
 if progress_sheet:
     try: xp = int(progress_sheet.row_values(2)[1])
@@ -93,13 +92,11 @@ elif xp < 2500: level, badge = "Level 2: Apprentice 📖", "🥈 Silver Explorer
 else: level, badge = "Level 3: Scholar 🧠", "🥇 Gold Master"
 
 def save_progress(new_xp):
-    # BLOCK SAVING IF IN TEST MODE
     if progress_sheet and not st.session_state.get('test_mode'):
         try: progress_sheet.update('B2', [[new_xp]])
         except: pass
 
 def log_work(activity, subject, chapter, score, result, xp_earned, note):
-    # BLOCK SAVING IF IN TEST MODE
     if work_log_sheet and not st.session_state.get('test_mode'):
         try:
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -120,7 +117,6 @@ with st.sidebar:
     st.header("🔐 Login")
     user_mode = st.radio("Mode:", ["Student (Richard)", "Developer (Parent)"])
     
-    # INITIALIZE SESSION STATE FOR DEV/TEST MODES
     if "is_dev" not in st.session_state: st.session_state.is_dev = False
     if "test_mode" not in st.session_state: st.session_state.test_mode = False
 
@@ -128,7 +124,6 @@ with st.sidebar:
         if st.text_input("Password:", type="password") == "parent123":
             st.session_state.is_dev = True
             st.success("Dev Access ✅")
-            # NEW: Test Mode Checkbox
             st.session_state.test_mode = st.checkbox("🧪 Test as Student (No Progress Saved)")
             if st.session_state.test_mode:
                 st.info("⚠️ TEST MODE ACTIVE: XP and mistakes will NOT be saved.")
@@ -142,7 +137,6 @@ with st.sidebar:
 # ==========================================
 # 4. DEVELOPER DASHBOARD
 # ==========================================
-# If Developer is logged in, AND not in Test Mode
 if st.session_state.get("is_dev") and not st.session_state.get("test_mode"):
     st.header("👨‍💻 Parent Dashboard")
     tab1, tab2, tab3, tab4 = st.tabs(["📚 Upload Materials", "☁️ Cloud Library", "📈 Progress & Work Log", "❌ Mistake Log"])
@@ -201,7 +195,7 @@ if st.session_state.get("is_dev") and not st.session_state.get("test_mode"):
                 else:
                     st.info("Work log is currently empty.")
             except Exception as e:
-                st.warning("Could not read Work Log. It might be empty or have formatting issues.")
+                st.warning("Could not read Work Log.")
                 
     with tab4:
         if mistakes_sheet:
@@ -269,8 +263,9 @@ else:
         subj, book, chap = st.session_state.study_info
         st.header(f"🧑‍🏫 1-on-1 Lesson: {subj} {book} {chap}")
         
+        # INITIATE THE FIRST LESSON
         if not st.session_state.study_started:
-            with st.spinner("Teacher is fetching the textbook..."):
+            with st.spinner("Teacher is reading the textbook and preparing the first concept..."):
                 context_text = ""
                 docs = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", chap).stream()
                 for doc in docs:
@@ -280,17 +275,35 @@ else:
                     st.error("No textbook material found.")
                 else:
                     st.session_state.textbook_text = context_text[:8000]
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": f"Hi Richard! I'm your AI teacher. Today we are learning **{chap}**. I will explain a small part, and then ask you a quick question to make sure you understand. Ready? Let's go!\n\nHere is the first concept..."
-                    })
+                    
+                    # ASK AI TO GENERATE THE FIRST EXPLANATION
+                    initial_prompt = f"""You are a patient, fun 1-on-1 MOE tutor for Richard. 
+                    Textbook Context: {st.session_state.textbook_text}
+                    
+                    TASK:
+                    1. Read the textbook context.
+                    2. Explain the VERY FIRST concept of this chapter in simple terms. Use an analogy if possible. 
+                    3. Keep it under 4 sentences.
+                    4. End by asking Richard ONE simple question to test his understanding.
+                    
+                    DO NOT say "Here is the first concept". Just start explaining it directly.
+                    """
+                    
+                    try:
+                        first_response = ask_ai(initial_prompt)
+                        st.session_state.chat_history.append({"role": "assistant", "content": first_response})
+                    except Exception as e:
+                        st.error(f"Failed to load lesson. Error: {e}")
+                        
                     st.session_state.study_started = True
                     st.rerun()
 
+        # Display Chat History
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
+        # Chat Input
         if prompt := st.chat_input("Type your answer here..."):
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
@@ -300,7 +313,7 @@ else:
                 with st.spinner("Thinking..."):
                     history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
                     
-                    prompt = f"""You are a patient, fun 1-on-1 MOE tutor for Richard. 
+                    chat_prompt = f"""You are a patient, fun 1-on-1 MOE tutor for Richard. 
                     Textbook Context: {st.session_state.textbook_text}
                     
                     Conversation so far:
@@ -308,13 +321,12 @@ else:
                     
                     RULES:
                     1. Do NOT give a huge wall of text.
-                    2. If you just explained a concept, ask Richard ONE simple question to test him.
-                    3. If he answers correctly, praise him and explain the NEXT small concept, then ask a slightly harder question.
-                    4. If he answers wrong, gently correct him and ask a simpler question.
-                    5. Continue this loop for 5 successful steps. At the 5th step, tell him "Great job! You are ready for the test now. Click Back to Home to start the test."
+                    2. If Richard answered your last question correctly, praise him and explain the NEXT small concept. Then ask a slightly harder question.
+                    3. If he answered wrong, gently correct him and ask a simpler question.
+                    4. Continue this loop for 5 successful steps. At the 5th step, tell him "Great job! You are ready for the test now. Click Back to Home to start the test."
                     """
                     
-                    response = ask_ai(prompt)
+                    response = ask_ai(chat_prompt)
                     st.session_state.chat_history.append({"role": "assistant", "content": response})
                     st.markdown(response)
 
