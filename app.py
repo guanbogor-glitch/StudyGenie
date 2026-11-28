@@ -125,8 +125,6 @@ with st.sidebar:
             st.success("Dev Access ✅")
         else:
             is_dev = False
-            if st.session_state.get("entered_pw"):
-                st.error("Incorrect Password")
 
 # ==========================================
 # 4. DEVELOPER DASHBOARD
@@ -142,7 +140,7 @@ if is_dev:
             subject = st.selectbox("Subject:", ["Mathematics", "Science", "English"])
             book_level = st.selectbox("Book / Level:", ["Sec 2A", "Sec 2B", "Sec 1 Review"])
         with col2:
-            chapter = st.selectbox("Chapter:", ["Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"])
+            chapter = st.selectbox("Chapter:", ["Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7", "All Chapters"])
             mat_type = st.radio("Type:", ["Knowledge Base (Textbook)", "Question Bank (Exam Papers)"])
             
         uploaded_files = st.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
@@ -151,18 +149,15 @@ if is_dev:
             if uploaded_files and db_fs and bucket:
                 for file in uploaded_files:
                     with st.spinner(f"Extracting text & uploading {file.name}..."):
-                        # 1. Extract Text
                         try:
                             reader = PdfReader(io.BytesIO(file.getvalue()))
                             extracted_text = "".join([page.extract_text() + "\n" for page in reader.pages])
                         except:
                             extracted_text = "No text could be extracted."
                             
-                        # 2. Upload PDF to Storage
                         blob = bucket.blob(f"{subject}/{book_level}/{chapter}/{mat_type}/{file.name}")
                         blob.upload_from_string(file.getvalue(), content_type=file.type)
                         
-                        # 3. Save metadata AND text to Firestore
                         doc_ref = db_fs.collection("materials").document()
                         doc_ref.set({
                             "subject": subject,
@@ -171,7 +166,7 @@ if is_dev:
                             "type": mat_type,
                             "file_name": file.name,
                             "gcs_path": blob.name,
-                            "extracted_text": extracted_text[:100000], # Limit to first 100k chars to avoid Firestore limits
+                            "extracted_text": extracted_text[:100000],
                             "timestamp": firestore.SERVER_TIMESTAMP
                         })
                 st.success("Files and text saved to Cloud!")
@@ -188,7 +183,8 @@ if is_dev:
                     data = doc.to_dict()
                     col1, col2 = st.columns([5, 1])
                     with col1:
-                        st.write(f"**{data.get('subject')}** | {data.get('book_level')} | {data.get('chapter')} | {data.get('type')} | `{data.get('file_name')}`")
+                        text_len = len(data.get('extracted_text', ''))
+                        st.write(f"**{data.get('subject')}** | {data.get('book_level')} | {data.get('chapter')} | {data.get('type')} | `{data.get('file_name')}` | Text: {text_len} chars")
                     with col2:
                         if st.button("🗑️", key=f"del_{doc.id}"):
                             try:
@@ -202,7 +198,6 @@ if is_dev:
         st.subheader("📈 XP Progress Chart")
         if progress_sheet:
             try:
-                # Fake history for now, or read from a history sheet if we add one
                 chart_data = pd.DataFrame({"Date": ["Start", "Week 1", "Week 2", "Today"], "XP": [0, int(xp*0.2), int(xp*0.6), xp]})
                 fig = px.line(chart_data, x="Date", y="XP", markers=True)
                 st.plotly_chart(fig, use_container_width=True)
@@ -236,7 +231,6 @@ if is_dev:
 else:
     if "mode" not in st.session_state: st.session_state.mode = "home"
     
-    # --- HOME SCREEN ---
     if st.session_state.mode == "home":
         st.write("Welcome Richard! Choose your study mode:")
         
@@ -255,6 +249,7 @@ else:
                 st.session_state.q_idx = 0
                 st.session_state.answers = {}
                 st.session_state.current_test = None
+                st.session_state.test_results = None
                 st.rerun()
                 
             if c2.button("🔥 Hard Mode"):
@@ -264,6 +259,7 @@ else:
                 st.session_state.q_idx = 0
                 st.session_state.answers = {}
                 st.session_state.current_test = None
+                st.session_state.test_results = None
                 st.rerun()
                 
         with col2:
@@ -273,7 +269,6 @@ else:
                 st.session_state.mode = "homework"
                 st.rerun()
 
-    # --- HOMEWORK GRADING ---
     elif st.session_state.mode == "homework":
         st.header("📸 Homework Auto-Grading")
         uploaded_file = st.file_uploader("Upload a photo or PDF of your work", type=["pdf", "jpg", "png", "jpeg"])
@@ -307,7 +302,6 @@ else:
                     for i, item in enumerate(results):
                         if item.get("is_correct"): score += 1
                         else:
-                            # Log to DB
                             if mistakes_sheet:
                                 mistakes_sheet.append_row([str(datetime.now()), "Homework", item.get("question",""), item.get("correct_answer",""), item.get("student_answer","")])
                                 
@@ -331,64 +325,69 @@ else:
             st.session_state.mode = "home"
             st.rerun()
 
-    # --- SMART TEST ---
     elif st.session_state.mode == "test":
         subj, book, chap = st.session_state.test_info
         t_type = st.session_state.test_type
-        st.header(f"📝 {t_type}: {subj} {book} {chap}")
         
         if st.session_state.get("test_results") is None:
             if st.session_state.get("current_test") is None:
+                st.header(f"📝 Generating {t_type}: {subj} {book} {chap}")
                 if not db_fs:
                     st.error("Database offline.")
                     if st.button("Back"): st.session_state.mode = "home"; st.rerun()
                     st.stop()
                     
-                with st.spinner("Teacher is finding the right materials and generating questions..."):
-                    # Fetch Text from Firestore
-                    docs = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", chap).where("type", "==", t_type).stream()
+                with st.spinner("Teacher is reading your textbook and generating a smart test..."):
                     context_text = ""
-                    for doc in docs:
+                    docs_ch = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", chap).where("type", "==", t_type).stream()
+                    for doc in docs_ch:
+                        context_text += doc.to_dict().get("extracted_text", "") + "\n"
+                        
+                    docs_all = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", "All Chapters").stream()
+                    for doc in docs_all:
                         context_text += doc.to_dict().get("extracted_text", "") + "\n"
                     
+                    # If no text found, use fallback
                     if len(context_text) < 100:
-                        st.warning("Not enough material found. Generating standard MOE questions.")
-                        context_text = f"Standard MOE Secondary 2 questions for {chap}."
+                        context_text = f"Standard MOE Secondary 2 Mathematics questions for {chap}."
                     
-                    context_text = context_text[:15000] # Cap to avoid token limits
+                    context_text = context_text[:10000] # Limit to avoid token overflow
                     
-                    # Generate 5 Questions Loop
-                    generated_test = {}
-                    for i in range(1, 6):
-                        success = False
-                        for attempt in range(3):
-                            try:
-                                prompt = f"""Here is the textbook/exam material:
-                                {context_text}
-                                
-                                Create ONE new multiple-choice question based on this material. 
-                                Output EXACTLY this text format, no markdown:
-                                Question
-                                A) opt1
-                                B) opt2
-                                C) opt3
-                                D) opt4
-                                Answer: A"""
-                                
-                                response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-                                text = response.text.strip()
-                                lines = [line.strip() for line in text.split('\n') if line.strip()]
-                                
-                                if len(lines) >= 6 and lines[-1].startswith("Answer:"):
-                                    generated_test[f"Q{i}"] = {"question": lines[0], "options": lines[1:5], "answer": lines[5].split(":")[1].strip()}
-                                    success = True
-                                    break
-                            except: time.sleep(1)
-                        if not success:
-                            generated_test[f"Q{i}"] = {"question": "Solve: 2x + 5 = 15", "options": ["A) x = 5", "B) x = 4", "C) x = 10", "D) x = 2"], "answer": "A"}
-                            
-                    st.session_state.current_test = generated_test
-                st.rerun()
+                    # Use JSON Mode for 5 questions at once (Much more reliable)
+                    prompt = f"""Here is material from Richard's textbook/exam paper for {chap}:
+                    {context_text}
+                    
+                    Generate exactly 5 multiple-choice questions based on this material. They should be MOE Sec 2 difficulty.
+                    Output ONLY a valid JSON array of objects with keys: 'question', 'options' (array of 4 strings like 'A) ...'), 'answer' (e.g., 'A').
+                    """
+                    
+                    try:
+                        response = client.models.generate_content(
+                            model="gemini-2.5-pro",
+                            contents=prompt,
+                            config=types.GenerateContentConfig(response_mime_type="application/json")
+                        )
+                        raw_json = response.text
+                        # Sometimes AI wraps in markdown, clean it
+                        if raw_json.startswith("```json"):
+                            raw_json = raw_json[7:-3]
+                        
+                        questions_list = json.loads(raw_json)
+                        
+                        generated_test = {}
+                        for i, q in enumerate(questions_list, 1):
+                            generated_test[f"Q{i}"] = {
+                                "question": q['question'],
+                                "options": q['options'],
+                                "answer": q['answer']
+                            }
+                        st.session_state.current_test = generated_test
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"AI formatting error. Please try again. Details: {e}")
+                        if st.button("Try Again 🔄"): st.rerun()
+                        st.stop()
 
             # DISPLAY TEST
             test_data = st.session_state.current_test
@@ -397,6 +396,7 @@ else:
             curr_idx = st.session_state.q_idx
             
             if curr_idx < total_q:
+                st.header(f"📝 {t_type}: {subj} {book} {chap}")
                 st.progress((curr_idx + 1) / total_q)
                 q_data = test_data[q_keys[curr_idx]]
                 
@@ -404,7 +404,6 @@ else:
                 ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
                 st.session_state.answers[q_keys[curr_idx]] = ans
                 
-                # Hint Button
                 with st.popover("🆘 I'm Stuck (Need a Hint)"):
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking..."):
@@ -424,14 +423,16 @@ else:
 
         # --- RESULTS VIEW ---
         else:
+            st.header(f"📊 Results: {subj} {book} {chap}")
             test_data = st.session_state.current_test
             user_answers = st.session_state.test_results["user_answers"]
             
+            total_q = len(test_data) # <--- THIS FIXES THE ERROR
             score = 0
             for q_key, q_data in test_data.items():
                 if user_answers[q_key].startswith(q_data['answer']): score += 1
                     
-            st.subheader(f"📊 Score: {score}/{total_q}")
+            st.subheader(f"Score: {score}/{total_q}")
             
             base_xp = score * 2
             result_msg = "Needs Practice"
@@ -446,7 +447,7 @@ else:
                 base_xp += 10
                 result_msg = "Passed"
                 
-            if "Hard Mode" in t_type:
+            if "Question Bank" in t_type:
                 base_xp += 20
                 st.warning("🔥 HARD MODE BONUS: +20 XP awarded!")
                 
@@ -456,7 +457,6 @@ else:
             
             st.write(f"🏆 You earned **{base_xp} XP**!")
             
-            # Mistake Logging
             if score < total_q and mistakes_sheet:
                 for q_key, q_data in test_data.items():
                     if not user_answers[q_key].startswith(q_data['answer']):
@@ -466,4 +466,5 @@ else:
             
             if st.button("Return Home 🏠"):
                 st.session_state.mode = "home"
+                st.session_state.test_results = None
                 st.rerun()
