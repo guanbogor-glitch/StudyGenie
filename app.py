@@ -79,6 +79,19 @@ progress_sheet, mistakes_sheet, work_log_sheet = get_sheets()
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
+# --- TEMPORARY MODEL CHECKER ---
+if st.button("🔍 List Available Models"):
+    try:
+        available_models = []
+        for m in client.models.list():
+            if 'generateContent' in m.supported_actions:
+                available_models.append(m.name)
+        st.write("Here are the models your API key can use:")
+        st.write(available_models)
+    except Exception as e:
+        st.error(f"Could not list models: {e}")
+# -------------------------------
+
 # ==========================================
 # 2. XP & HELPER FUNCTIONS
 # ==========================================
