@@ -80,16 +80,16 @@ api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
 # --- TEMPORARY MODEL CHECKER ---
-if st.button("🔍 List Available Models"):
+if st.sidebar.button("🔍 List Available Models"):
     try:
         available_models = []
         for m in client.models.list():
             if 'generateContent' in m.supported_actions:
                 available_models.append(m.name)
-        st.write("Here are the models your API key can use:")
-        st.write(available_models)
+        st.sidebar.write("Models available:")
+        st.sidebar.write(available_models)
     except Exception as e:
-        st.error(f"Could not list models: {e}")
+        st.sidebar.error(f"Could not list models: {e}")
 # -------------------------------
 
 # ==========================================
@@ -297,14 +297,14 @@ else:
                         reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
                         text = "".join([page.extract_text() for page in reader.pages])
                         response = client.models.generate_content(
-                            model="gemini-pro-latest",
+                            model="gemini-1.5-pro",
                             contents=[prompt, f"Here is the text:\n{text}"],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                     else:
                         img = Image.open(io.BytesIO(uploaded_file.getvalue()))
                         response = client.models.generate_content(
-                            model="gemini-pro-latest",
+                            model="gemini-1.5-pro",
                             contents=[prompt, img],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -375,7 +375,7 @@ else:
                     
                     try:
                         response = client.models.generate_content(
-                            model="gemini-pro-latest",
+                            model="gemini-1.5-pro",
                             contents=prompt,
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -419,7 +419,7 @@ else:
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking..."):
                             hint_prompt = f"Give a Socratic hint for this question without revealing the answer: {q_data['question']}"
-                            hint_res = client.models.generate_content(model="gemini-pro-latest", contents=hint_prompt)
+                            hint_res = client.models.generate_content(model="gemini-1.5-pro", contents=hint_prompt)
                             st.info(f"**Hint:** {hint_res.text}")
                             
                 if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
