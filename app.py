@@ -77,19 +77,16 @@ def get_sheets():
 progress_sheet, mistakes_sheet, work_log_sheet = get_sheets()
 
 api_key = st.secrets["GEMINI_API_KEY"]
-
-# Initialize client normally (let SDK figure out the version)
 client = genai.Client(api_key=api_key)
 
-# --- SMART FALLBACK AI ENGINE ---
+# --- SMART FALLBACK AI ENGINE (USING YOUR ACTUAL MODELS) ---
 def generate_with_fallback(prompt, config=None):
-    """Tries multiple models until one works."""
+    """Tries the best models available in your specific API project."""
     models_to_try = [
-        "gemini-1.5-flash-001",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro-001",
-        "gemini-1.5-pro",
-        "gemini-pro"
+        "gemini-2.5-flash",      # Best balance of speed and intelligence
+        "gemini-2.5-pro",        # Heavy lifter if flash fails
+        "gemini-3.5-flash",      # Fallback to newer generation
+        "gemini-2.5-flash-lite"  # Last resort lightweight model
     ]
     
     last_error = ""
@@ -107,9 +104,8 @@ def generate_with_fallback(prompt, config=None):
             
     raise Exception(f"All models failed. Last error: {last_error}")
 
-# --- TEMPORARY MODEL CHECKER (On Main Screen) ---
+# --- TEMPORARY MODEL CHECKER (Keep this so we can verify) ---
 with st.expander("🛠️ Troubleshooting: List Available Models"):
-    st.write("Click the button below to see exactly which Gemini models your API key can use.")
     if st.button("🔍 Check My API Models"):
         try:
             available_models = []
@@ -120,7 +116,6 @@ with st.expander("🛠️ Troubleshooting: List Available Models"):
             st.write(available_models)
         except Exception as e:
             st.error(f"Could not list models: {e}")
-# -----------------------------------------------
 
 # ==========================================
 # 2. XP & HELPER FUNCTIONS
@@ -330,11 +325,10 @@ else:
                         text = "".join([page.extract_text() for page in reader.pages])
                         raw_json = generate_with_fallback(f"{prompt}\n\nHere is the text:\n{text}", config=config)
                     else:
-                        # For images, we need to use a multimodal model
                         img = Image.open(io.BytesIO(uploaded_file.getvalue()))
-                        # Since fallback might hit a text-only model, let's just use flash directly for images
+                        # For images, we use gemini-2.5-flash directly as it supports vision
                         response = client.models.generate_content(
-                            model="gemini-1.5-flash-001",
+                            model="gemini-2.5-flash",
                             contents=[prompt, img],
                             config=config
                         )
