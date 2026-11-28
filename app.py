@@ -284,14 +284,14 @@ else:
                         reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
                         text = "".join([page.extract_text() for page in reader.pages])
                         response = client.models.generate_content(
-                            model="gemini-3.1-pro-preview",
+                            model="gemini-pro-latest",
                             contents=[prompt, f"Here is the text:\n{text}"],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                     else:
                         img = Image.open(io.BytesIO(uploaded_file.getvalue()))
                         response = client.models.generate_content(
-                            model="gemini-3.1-pro-preview",
+                            model="gemini-pro-latest",
                             contents=[prompt, img],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -362,7 +362,7 @@ else:
                     
                     try:
                         response = client.models.generate_content(
-                            model="gemini-3.1-pro-preview",
+                            model="gemini-pro-latest",
                             contents=prompt,
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -406,7 +406,7 @@ else:
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking..."):
                             hint_prompt = f"Give a Socratic hint for this question without revealing the answer: {q_data['question']}"
-                            hint_res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=hint_prompt)
+                            hint_res = client.models.generate_content(model="gemini-pro-latest", contents=hint_prompt)
                             st.info(f"**Hint:** {hint_res.text}")
                             
                 if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
