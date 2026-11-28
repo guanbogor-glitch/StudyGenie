@@ -284,14 +284,14 @@ else:
                         reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
                         text = "".join([page.extract_text() for page in reader.pages])
                         response = client.models.generate_content(
-                            model="gemini-2.5-pro",
+                            model="gemini-3.1-pro-preview",
                             contents=[prompt, f"Here is the text:\n{text}"],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                     else:
                         img = Image.open(io.BytesIO(uploaded_file.getvalue()))
                         response = client.models.generate_content(
-                            model="gemini-2.5-pro",
+                            model="gemini-3.1-pro-preview",
                             contents=[prompt, img],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -337,7 +337,7 @@ else:
                     if st.button("Back"): st.session_state.mode = "home"; st.rerun()
                     st.stop()
                     
-                with st.spinner("Teacher is reading your textbook and generating a smart test..."):
+                with st.spinner("Teacher is reading your textbook and generating a 10-question test..."):
                     context_text = ""
                     docs_ch = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", chap).where("type", "==", t_type).stream()
                     for doc in docs_ch:
@@ -347,28 +347,26 @@ else:
                     for doc in docs_all:
                         context_text += doc.to_dict().get("extracted_text", "") + "\n"
                     
-                    # If no text found, use fallback
                     if len(context_text) < 100:
                         context_text = f"Standard MOE Secondary 2 Mathematics questions for {chap}."
                     
-                    context_text = context_text[:10000] # Limit to avoid token overflow
+                    context_text = context_text[:10000]
                     
-                    # Use JSON Mode for 5 questions at once (Much more reliable)
+                    # 10 QUESTIONS JSON MODE
                     prompt = f"""Here is material from Richard's textbook/exam paper for {chap}:
                     {context_text}
                     
-                    Generate exactly 5 multiple-choice questions based on this material. They should be MOE Sec 2 difficulty.
+                    Generate exactly 10 multiple-choice questions based on this material. They should be MOE Sec 2 difficulty.
                     Output ONLY a valid JSON array of objects with keys: 'question', 'options' (array of 4 strings like 'A) ...'), 'answer' (e.g., 'A').
                     """
                     
                     try:
                         response = client.models.generate_content(
-                            model="gemini-2.5-pro",
+                            model="gemini-3.1-pro-preview",
                             contents=prompt,
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                         raw_json = response.text
-                        # Sometimes AI wraps in markdown, clean it
                         if raw_json.startswith("```json"):
                             raw_json = raw_json[7:-3]
                         
@@ -408,7 +406,7 @@ else:
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking..."):
                             hint_prompt = f"Give a Socratic hint for this question without revealing the answer: {q_data['question']}"
-                            hint_res = client.models.generate_content(model="gemini-2.5-pro", contents=hint_prompt)
+                            hint_res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=hint_prompt)
                             st.info(f"**Hint:** {hint_res.text}")
                             
                 if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
@@ -427,7 +425,7 @@ else:
             test_data = st.session_state.current_test
             user_answers = st.session_state.test_results["user_answers"]
             
-            total_q = len(test_data) # <--- THIS FIXES THE ERROR
+            total_q = len(test_data)
             score = 0
             for q_key, q_data in test_data.items():
                 if user_answers[q_key].startswith(q_data['answer']): score += 1
