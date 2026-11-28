@@ -78,24 +78,49 @@ progress_sheet, mistakes_sheet, work_log_sheet = get_sheets()
 
 api_key = st.secrets["GEMINI_API_KEY"]
 
-# 🔥 THE MAGIC FIX: Forcing the API to use v1beta
-client = genai.Client(
-    api_key=api_key,
-    http_options={'api_version': 'v1beta'}
-)
+# Initialize client normally (let SDK figure out the version)
+client = genai.Client(api_key=api_key)
 
-# --- TEMPORARY MODEL CHECKER ---
-if st.sidebar.button("🔍 List Available Models"):
-    try:
-        available_models = []
-        for m in client.models.list():
-            if 'generateContent' in m.supported_actions:
-                available_models.append(m.name)
-        st.sidebar.write("Models available:")
-        st.sidebar.write(available_models)
-    except Exception as e:
-        st.sidebar.error(f"Could not list models: {e}")
-# -------------------------------
+# --- SMART FALLBACK AI ENGINE ---
+def generate_with_fallback(prompt, config=None):
+    """Tries multiple models until one works."""
+    models_to_try = [
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro-001",
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
+    
+    last_error = ""
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config
+            )
+            return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue # If it fails, try the next model in the list
+            
+    raise Exception(f"All models failed. Last error: {last_error}")
+
+# --- TEMPORARY MODEL CHECKER (On Main Screen) ---
+with st.expander("🛠️ Troubleshooting: List Available Models"):
+    st.write("Click the button below to see exactly which Gemini models your API key can use.")
+    if st.button("🔍 Check My API Models"):
+        try:
+            available_models = []
+            for m in client.models.list():
+                if 'generateContent' in m.supported_actions:
+                    available_models.append(m.name)
+            st.success("Models found:")
+            st.write(available_models)
+        except Exception as e:
+            st.error(f"Could not list models: {e}")
+# -----------------------------------------------
 
 # ==========================================
 # 2. XP & HELPER FUNCTIONS
@@ -298,23 +323,24 @@ else:
                     Output ONLY a valid JSON array of objects with keys: 'question', 'student_answer', 'correct_answer', 'is_correct' (boolean), 'feedback' (1 short sentence).
                     Format: [{"question": "...", "student_answer": "...", "correct_answer": "...", "is_correct": true, "feedback": "..."}]"""
                     
+                    config = types.GenerateContentConfig(response_mime_type="application/json")
+                    
                     if uploaded_file.type == "application/pdf":
                         reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
                         text = "".join([page.extract_text() for page in reader.pages])
-                        response = client.models.generate_content(
-                            model="gemini-1.5-flash",
-                            contents=[prompt, f"Here is the text:\n{text}"],
-                            config=types.GenerateContentConfig(response_mime_type="application/json")
-                        )
+                        raw_json = generate_with_fallback(f"{prompt}\n\nHere is the text:\n{text}", config=config)
                     else:
+                        # For images, we need to use a multimodal model
                         img = Image.open(io.BytesIO(uploaded_file.getvalue()))
+                        # Since fallback might hit a text-only model, let's just use flash directly for images
                         response = client.models.generate_content(
-                            model="gemini-1.5-flash",
+                            model="gemini-1.5-flash-001",
                             contents=[prompt, img],
-                            config=types.GenerateContentConfig(response_mime_type="application/json")
+                            config=config
                         )
+                        raw_json = response.text
                         
-                    results = json.loads(response.text)
+                    results = json.loads(raw_json)
                     
                     score = 0
                     for i, item in enumerate(results):
@@ -370,7 +396,6 @@ else:
                     
                     context_text = context_text[:10000]
                     
-                    # 10 QUESTIONS JSON MODE
                     prompt = f"""Here is material from Richard's textbook/exam paper for {chap}:
                     {context_text}
                     
@@ -379,12 +404,9 @@ else:
                     """
                     
                     try:
-                        response = client.models.generate_content(
-                            model="gemini-1.5-flash",
-                            contents=prompt,
-                            config=types.GenerateContentConfig(response_mime_type="application/json")
-                        )
-                        raw_json = response.text
+                        config = types.GenerateContentConfig(response_mime_type="application/json")
+                        raw_json = generate_with_fallback(prompt, config=config)
+                        
                         if raw_json.startswith("```json"):
                             raw_json = raw_json[7:-3]
                         
@@ -401,7 +423,7 @@ else:
                         st.rerun()
                         
                     except Exception as e:
-                        st.error(f"AI formatting error. Please try again. Details: {e}")
+                        st.error(f"All AI models failed or formatting error. Details: {e}")
                         if st.button("Try Again 🔄"): st.rerun()
                         st.stop()
 
@@ -424,8 +446,8 @@ else:
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking..."):
                             hint_prompt = f"Give a Socratic hint for this question without revealing the answer: {q_data['question']}"
-                            hint_res = client.models.generate_content(model="gemini-1.5-flash", contents=hint_prompt)
-                            st.info(f"**Hint:** {hint_res.text}")
+                            hint_res = generate_with_fallback(hint_prompt)
+                            st.info(f"**Hint:** {hint_res}")
                             
                 if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
                     if "--- Select ---" in st.session_state.answers.values():
