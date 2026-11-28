@@ -82,6 +82,7 @@ def ask_ai(prompt, config=None):
 # ==========================================
 # 2. XP & HELPER FUNCTIONS
 # ==========================================
+# Fetch XP (only if not in test mode)
 xp = 0
 if progress_sheet:
     try: xp = int(progress_sheet.row_values(2)[1])
@@ -92,12 +93,14 @@ elif xp < 2500: level, badge = "Level 2: Apprentice 📖", "🥈 Silver Explorer
 else: level, badge = "Level 3: Scholar 🧠", "🥇 Gold Master"
 
 def save_progress(new_xp):
-    if progress_sheet:
+    # BLOCK SAVING IF IN TEST MODE
+    if progress_sheet and not st.session_state.get('test_mode'):
         try: progress_sheet.update('B2', [[new_xp]])
         except: pass
 
 def log_work(activity, subject, chapter, score, result, xp_earned, note):
-    if work_log_sheet:
+    # BLOCK SAVING IF IN TEST MODE
+    if work_log_sheet and not st.session_state.get('test_mode'):
         try:
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             work_log_sheet.append_row([date_str, activity, subject, chapter, score, result, xp_earned, note])
@@ -116,18 +119,31 @@ with st.sidebar:
     st.divider()
     st.header("🔐 Login")
     user_mode = st.radio("Mode:", ["Student (Richard)", "Developer (Parent)"])
-    is_dev = (user_mode == "Developer (Parent)")
     
-    if is_dev:
+    # INITIALIZE SESSION STATE FOR DEV/TEST MODES
+    if "is_dev" not in st.session_state: st.session_state.is_dev = False
+    if "test_mode" not in st.session_state: st.session_state.test_mode = False
+
+    if user_mode == "Developer (Parent)":
         if st.text_input("Password:", type="password") == "parent123":
+            st.session_state.is_dev = True
             st.success("Dev Access ✅")
+            # NEW: Test Mode Checkbox
+            st.session_state.test_mode = st.checkbox("🧪 Test as Student (No Progress Saved)")
+            if st.session_state.test_mode:
+                st.info("⚠️ TEST MODE ACTIVE: XP and mistakes will NOT be saved.")
         else:
-            is_dev = False
+            st.session_state.is_dev = False
+            st.session_state.test_mode = False
+    else:
+        st.session_state.is_dev = False
+        st.session_state.test_mode = False
 
 # ==========================================
 # 4. DEVELOPER DASHBOARD
 # ==========================================
-if is_dev:
+# If Developer is logged in, AND not in Test Mode
+if st.session_state.get("is_dev") and not st.session_state.get("test_mode"):
     st.header("👨‍💻 Parent Dashboard")
     tab1, tab2, tab3, tab4 = st.tabs(["📚 Upload Materials", "☁️ Cloud Library", "📈 Progress & Work Log", "❌ Mistake Log"])
     
@@ -177,8 +193,15 @@ if is_dev:
 
     with tab3:
         if work_log_sheet:
-            logs = work_log_sheet.get_all_records()
-            if logs: st.dataframe(pd.DataFrame(logs).iloc[::-1], use_container_width=True)
+            try:
+                logs = work_log_sheet.get_all_records()
+                if logs:
+                    df = pd.DataFrame(logs)
+                    st.dataframe(df.iloc[::-1], use_container_width=True)
+                else:
+                    st.info("Work log is currently empty.")
+            except Exception as e:
+                st.warning("Could not read Work Log. It might be empty or have formatting issues.")
                 
     with tab4:
         if mistakes_sheet:
@@ -188,12 +211,15 @@ if is_dev:
                     with st.expander(f"❌ {row['Question'][:50]}..."):
                         st.write(f"**Richard's Answer:** {row['Richard_Answer']}")
                         st.write(f"**Correct Answer:** {row['Correct_Answer']}")
-            except: pass
+            except: st.info("No mistakes logged yet.")
 
 # ==========================================
-# 5. STUDENT VIEW
+# 5. STUDENT VIEW (Also used for Test Mode)
 # ==========================================
 else:
+    if st.session_state.get("test_mode"):
+        st.warning("🧪 **YOU ARE IN TEST MODE.** Progress will not be saved.")
+        
     if "mode" not in st.session_state: st.session_state.mode = "home"
     
     if st.session_state.mode == "home":
@@ -243,7 +269,6 @@ else:
         subj, book, chap = st.session_state.study_info
         st.header(f"🧑‍🏫 1-on-1 Lesson: {subj} {book} {chap}")
         
-        # Initialize Chat
         if not st.session_state.study_started:
             with st.spinner("Teacher is fetching the textbook..."):
                 context_text = ""
@@ -262,12 +287,10 @@ else:
                     st.session_state.study_started = True
                     st.rerun()
 
-        # Display Chat History
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Chat Input
         if prompt := st.chat_input("Type your answer here..."):
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
@@ -275,7 +298,6 @@ else:
 
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
-                    # Build the teaching prompt
                     history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
                     
                     prompt = f"""You are a patient, fun 1-on-1 MOE tutor for Richard. 
@@ -290,7 +312,6 @@ else:
                     3. If he answers correctly, praise him and explain the NEXT small concept, then ask a slightly harder question.
                     4. If he answers wrong, gently correct him and ask a simpler question.
                     5. Continue this loop for 5 successful steps. At the 5th step, tell him "Great job! You are ready for the test now. Click Back to Home to start the test."
-                    6. DO NOT give him the final test questions. Keep it as a conversation.
                     """
                     
                     response = ask_ai(prompt)
@@ -329,7 +350,7 @@ else:
                     for i, item in enumerate(results):
                         if item.get("is_correct"): score += 1
                         else:
-                            if mistakes_sheet:
+                            if mistakes_sheet and not st.session_state.get('test_mode'):
                                 mistakes_sheet.append_row([str(datetime.now()), "Homework", item.get("question",""), item.get("correct_answer",""), item.get("student_answer","")])
                         with st.expander(f"Q{i+1}: {'✅ Correct' if item.get('is_correct') else '❌ Wrong'}"):
                             st.write(f"**Question:** {item.get('question','')}")
@@ -364,7 +385,6 @@ else:
                     
                     context_text = context_text[:10000]
                     
-                    # FORCED SPACING RULE
                     prompt = f"""Here is material from Richard's textbook/exam paper:
                     {context_text}
                     
@@ -415,7 +435,6 @@ else:
                 ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
                 st.session_state.answers[q_keys[curr_idx]] = ans
                 
-                # STRICT MATH HINT
                 with st.popover("🆘 I'm Stuck (Need a Hint)"):
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking of a hint..."):
@@ -486,7 +505,7 @@ else:
                     st.write(f"**Correct Answer:** {correct_opt}")
                     
                     if not is_correct:
-                        if mistakes_sheet:
+                        if mistakes_sheet and not st.session_state.get('test_mode'):
                             try: mistakes_sheet.append_row([str(datetime.now()), subj, q_data['question'], correct_opt, user_answers[q_key]])
                             except: pass
                             
