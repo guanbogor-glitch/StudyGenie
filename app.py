@@ -69,7 +69,6 @@ progress_sheet, mistakes_sheet, work_log_sheet = get_sheets()
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
-# --- SMART AI CALL (Using your verified models) ---
 def ask_ai(prompt, config=None):
     models_to_try = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.5-flash"]
     for model_name in models_to_try:
@@ -85,8 +84,7 @@ def ask_ai(prompt, config=None):
 # ==========================================
 xp = 0
 if progress_sheet:
-    try:
-        xp = int(progress_sheet.row_values(2)[1])
+    try: xp = int(progress_sheet.row_values(2)[1])
     except: pass
 
 if xp < 1000: level, badge = "Level 1: Novice 🌱", "🥉 Bronze Scout"
@@ -180,8 +178,7 @@ if is_dev:
     with tab3:
         if work_log_sheet:
             logs = work_log_sheet.get_all_records()
-            if logs:
-                st.dataframe(pd.DataFrame(logs).iloc[::-1], use_container_width=True)
+            if logs: st.dataframe(pd.DataFrame(logs).iloc[::-1], use_container_width=True)
                 
     with tab4:
         if mistakes_sheet:
@@ -208,9 +205,11 @@ else:
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("📖 Let's Learn First"):
-                st.session_state.mode = "study"
+            if st.button("🧑‍🏫 1-on-1 Teaching"):
+                st.session_state.mode = "study_chat"
                 st.session_state.study_info = (subj, book, chap)
+                st.session_state.chat_history = []
+                st.session_state.study_started = False
                 st.rerun()
         with col2:
             if st.button("📝 Standard Practice"):
@@ -235,40 +234,72 @@ else:
                 
         st.divider()
         st.subheader("📸 Homework Helper")
-        st.write("Upload your homework for auto-grading.")
         if st.button("Upload Homework"):
             st.session_state.mode = "homework"
             st.rerun()
 
-    # --- STUDY MODE ---
-    elif st.session_state.mode == "study":
+    # --- INTERACTIVE 1-ON-1 STUDY MODE ---
+    elif st.session_state.mode == "study_chat":
         subj, book, chap = st.session_state.study_info
-        st.header(f"📖 Studying: {subj} {book} {chap}")
+        st.header(f"🧑‍🏫 1-on-1 Lesson: {subj} {book} {chap}")
         
+        # Initialize Chat
+        if not st.session_state.study_started:
+            with st.spinner("Teacher is fetching the textbook..."):
+                context_text = ""
+                docs = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", chap).stream()
+                for doc in docs:
+                    context_text += doc.to_dict().get("extracted_text", "")
+                
+                if len(context_text) < 100:
+                    st.error("No textbook material found.")
+                else:
+                    st.session_state.textbook_text = context_text[:8000]
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": f"Hi Richard! I'm your AI teacher. Today we are learning **{chap}**. I will explain a small part, and then ask you a quick question to make sure you understand. Ready? Let's go!\n\nHere is the first concept..."
+                    })
+                    st.session_state.study_started = True
+                    st.rerun()
+
+        # Display Chat History
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat Input
+        if prompt := st.chat_input("Type your answer here..."):
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    # Build the teaching prompt
+                    history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
+                    
+                    prompt = f"""You are a patient, fun 1-on-1 MOE tutor for Richard. 
+                    Textbook Context: {st.session_state.textbook_text}
+                    
+                    Conversation so far:
+                    {history_str}
+                    
+                    RULES:
+                    1. Do NOT give a huge wall of text.
+                    2. If you just explained a concept, ask Richard ONE simple question to test him.
+                    3. If he answers correctly, praise him and explain the NEXT small concept, then ask a slightly harder question.
+                    4. If he answers wrong, gently correct him and ask a simpler question.
+                    5. Continue this loop for 5 successful steps. At the 5th step, tell him "Great job! You are ready for the test now. Click Back to Home to start the test."
+                    6. DO NOT give him the final test questions. Keep it as a conversation.
+                    """
+                    
+                    response = ask_ai(prompt)
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    st.markdown(response)
+
         if st.button("⬅️ Back to Home"):
             st.session_state.mode = "home"
             st.rerun()
-            
-        with st.spinner("Teacher is reading the textbook and preparing a fun summary..."):
-            context_text = ""
-            docs = db_fs.collection("materials").where("subject", "==", subj).where("book_level", "==", book).where("chapter", "==", chap).stream()
-            for doc in docs:
-                context_text += doc.to_dict().get("extracted_text", "")
-                
-            if len(context_text) < 100:
-                st.error("No textbook material found for this chapter.")
-            else:
-                prompt = f"""You are a fun, encouraging tutor for a 14-year-old student. 
-                Read this textbook chapter: {context_text[:8000]}
-                
-                Explain the key concepts in simple terms. Use a real-world analogy (like money, games, or food) to make it easy to understand. 
-                Keep it under 200 words. End with an encouraging message."""
-                
-                try:
-                    summary = ask_ai(prompt)
-                    st.info(summary)
-                except:
-                    st.error("Could not generate summary.")
 
     # --- HOMEWORK MODE ---
     elif st.session_state.mode == "homework":
@@ -333,17 +364,24 @@ else:
                     
                     context_text = context_text[:10000]
                     
+                    # FORCED SPACING RULE
                     prompt = f"""Here is material from Richard's textbook/exam paper:
                     {context_text}
                     
                     Generate exactly 10 multiple-choice questions.
                     
-                    IMPORTANT STRUCTURE:
-                    - Q1 to Q3: Very basic warm-up questions (to build confidence).
+                    STRUCTURE:
+                    - Q1 to Q3: Very basic warm-up.
                     - Q4 to Q7: Standard Sec 2 questions.
                     - Q8 to Q10: Challenging word problems.
                     
-                    VERY IMPORTANT FORMATTING: If an equation has multiple parts, separate them with a newline (\n) or the word "and".
+                    CRITICAL FORMATTING RULE: 
+                    If a question has multiple equations, you MUST format them with the word 'AND' on a new line. 
+                    Example: 
+                    2x + y = 10
+                    AND
+                    x - y = 2
+                    DO NOT put them on the same line.
                     
                     Output ONLY a valid JSON array: [{{"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A"}}]
                     """
@@ -377,13 +415,17 @@ else:
                 ans = st.radio("Select an answer:", ["--- Select ---"] + q_data['options'], key=f"radio_{curr_idx}")
                 st.session_state.answers[q_keys[curr_idx]] = ans
                 
-                # THE ANALOGY HINT
+                # STRICT MATH HINT
                 with st.popover("🆘 I'm Stuck (Need a Hint)"):
                     if st.button("Reveal Hint", key=f"btn_hint_{curr_idx}"):
                         with st.spinner("Thinking of a hint..."):
-                            hint_prompt = f"""You are a patient tutor. Richard is stuck on this question: {q_data['question']}.
-                            DO NOT give the answer. Give him a hint using a real-world analogy (like money, food, or age).
-                            Then ask him a simpler question to help him find the first step."""
+                            hint_prompt = f"""Richard is stuck on this math question: {q_data['question']}.
+                            The correct answer is {q_data['answer']}.
+                            RULES:
+                            1. Do not use fluffy words like "Don't worry" or "You can do it".
+                            2. Give him the FIRST mathematical step. 
+                            3. For example, say "Look at the first equation. Substitute x = 4 into it."
+                            """
                             st.info(f"**Hint:** {ask_ai(hint_prompt)}")
                             
                 if st.button("Next Question ➡️" if curr_idx < total_q - 1 else "Submit Test 🚀"):
@@ -407,8 +449,7 @@ else:
             for q_key, q_data in test_data.items():
                 if user_answers[q_key].startswith(q_data['answer']): score += 1
                     
-            # Effort-based XP
-            base_xp = (score * 2) + 10 # 10 XP for just finishing!
+            base_xp = (score * 2) + 10
             result_msg = "Needs Practice"
             if score == total_q:
                 st.balloons()
